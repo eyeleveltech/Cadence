@@ -1,0 +1,32 @@
+# Without this file, `COPY . .` in both Dockerfiles copies the host's
+# .env (every real secret) into an image layer, and drops the host's
+# node_modules on top of the clean `npm ci` install — which is how a
+# macOS build of sharp/rollup/Prisma ends up inside a Linux container.
+
+node_modules
+.next
+out
+build
+.git
+.gitignore
+
+# Secrets — the image gets its configuration from env_file at run time.
+.env
+.env.*
+!.env.example
+
+# Local state that must never be baked in.
+var
+public/media
+
+# Dev-only tooling and output.
+e2e
+test-results
+playwright-report
+coverage
+*.tsbuildinfo
+.scratch-*
+.DS_Store
+Dockerfile*
+docker-compose*.yml
+README.md

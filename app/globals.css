@@ -1,26 +1,271 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/**
+ * Cadence design tokens — "Omelette" system (Instrument Sans + IBM Plex
+ * Mono, cobalt accent). Single source of truth for palette, radius and
+ * type; every shadcn primitive and page in the app reads these vars
+ * rather than hardcoding color. See Foundations reference (V2, 14 Sep
+ * 2026) for the full spec this mirrors.
+ */
+:root {
+  color-scheme: light;
+
+  --font-sans: var(--font-instrument-sans), -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: var(--font-ibm-plex-mono), ui-monospace, "SF Mono", Menlo,
+    monospace;
+
+  --background: #f3f4f2;
+  --foreground: #151617;
+  --card: #ffffff;
+  --card-foreground: #151617;
+  --popover: #ffffff;
+  --popover-foreground: #151617;
+  --primary: #2a4bd7;
+  --primary-foreground: #ffffff;
+  --secondary: #f6f7f5;
+  --secondary-foreground: #151617;
+  --muted: #f6f7f5;
+  --muted-foreground: #7a7f84;
+  --accent: #f6f7f5;
+  --accent-foreground: #151617;
+  --destructive: #bf2e2e;
+  --border: #e4e6e2;
+  --input: #e4e6e2;
+  --ring: #2a4bd7;
+  --chart-1: #2a4bd7;
+  --chart-2: #1b7f4b;
+  --chart-3: #b0620f;
+  --chart-4: #7a7f84;
+  --chart-5: #4b4f53;
+  --radius: 0.4375rem;
+  --sidebar: #f3f4f2;
+  --sidebar-foreground: #151617;
+  --sidebar-primary: #2a4bd7;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ffffff;
+  --sidebar-accent-foreground: #151617;
+  --sidebar-border: #e4e6e2;
+  --sidebar-ring: #2a4bd7;
+
+  /* Ink scale and other Cadence-specific tokens beyond shadcn's base
+   * vocabulary — used directly by app-shell, status chips and tables. */
+  --ink2: #4b4f53;
+  --ink3: #7a7f84;
+  --ink4: #a6aaae;
+  --fill: #f6f7f5;
+  --row-hairline: #edeeeb;
+  --accent-hover: #213cb6;
+  --accent-soft: #e8ecfb;
+  --status-good: #1b7f4b;
+  --status-good-bg: #e4f3ea;
+  --status-warn: #b0620f;
+  --status-warn-bg: #fbf0df;
+  --status-bad: #bf2e2e;
+  --status-bad-bg: #fce8e8;
+  --ring-track: #e0e2de;
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    background: #f3f4f2;
+    color: #151617;
+  }
+  html {
+    @apply font-sans;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer components {
+  /* IBM Plex Mono label — timestamps, counts, file names, hex. Never for
+   * anything a person reads at length. */
+  .om-mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.01em;
+  }
+  /* Small uppercase section label, tracked wide, set in mono. */
+  .om-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink3);
+    font-weight: 500;
+    line-height: 16px;
+  }
+  .om-num {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Status pill — background/ink pairs for good / waiting / failed /
+   * accent states. Used for pills that aren't the ring (connection
+   * status, onboarding, etc). Never decorative — only real states. */
+  .om-pill {
+    @apply inline-flex h-[22px] w-fit shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-xs font-medium;
+    background: var(--fill);
+    color: var(--ink2);
+  }
+  .om-pill-good {
+    background: var(--status-good-bg);
+    color: var(--status-good);
+  }
+  .om-pill-warn {
+    background: var(--status-warn-bg);
+    color: var(--status-warn);
+  }
+  .om-pill-bad {
+    background: var(--status-bad-bg);
+    color: var(--status-bad);
+  }
+  .om-pill-accent {
+    background: var(--accent-soft);
+    color: var(--primary);
+  }
+  /* Solid variant — the strongest state a pill can show (e.g. "Active"
+   * on a client card). Never combine with the soft variants above. */
+  .om-pill-solid {
+    background: var(--foreground);
+    color: var(--background);
+  }
+
+  /* Status chip — the ring plus its label, in a bordered capsule. This
+   * is the one mark every post carries, from table row to phone card. */
+  .om-chip {
+    @apply inline-flex h-7 shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-md border bg-card px-2.5 pl-[7px] text-xs font-medium text-foreground;
+    border-color: var(--border);
+    box-shadow: 0 1px 1px rgba(21, 22, 23, 0.03);
+  }
+}
+
+/* FullCalendar reskin — the plan tab's month/week grid. Everything
+ * inside .fc is FullCalendar's own DOM, so these are plain global rules
+ * rather than Tailwind classes we control. */
+.fc {
+  font-family: var(--font-sans);
+  --fc-border-color: var(--row-hairline);
+  --fc-today-bg-color: transparent;
+}
+.fc .fc-scrollgrid {
+  border-color: var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.fc .fc-col-header-cell {
+  background: var(--fill);
+  border-color: var(--border);
+}
+.fc .fc-col-header-cell-cushion {
+  padding: 8px 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.fc .fc-daygrid-day-frame {
+  min-height: 96px;
+}
+.fc .fc-day-other .fc-daygrid-day-frame {
+  background: var(--fill);
+}
+.fc .fc-daygrid-day-top {
+  justify-content: flex-start;
+}
+.fc .fc-event {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+.fc .fc-daygrid-event-harness {
+  margin: 1px 0;
+}
+.fc a {
+  color: inherit;
 }

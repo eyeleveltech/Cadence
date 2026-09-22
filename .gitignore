@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# uploaded media (local disk storage adapter) — never in git
+/var
+public/media
+
+# playwright / vitest output
+/test-results
+/playwright-report
+
+# throwaway debugging scripts (they tend to hold real dev credentials)
+.scratch-*

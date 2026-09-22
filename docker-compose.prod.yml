@@ -1,0 +1,86 @@
+# VPS deployment: full stack. Postgres and Redis stay on the internal
+# network only — never publish their ports on a production host.
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - cadence_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - cadence_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Applies pending schema migrations once per deploy, before anything
+  # serves traffic. Without this the schema only ever reached production
+  # by someone remembering to run `prisma db push` by hand.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    env_file: .env.production
+    command: ["npx", "prisma", "migrate", "deploy"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env.production
+    ports:
+      - "3000:3000"
+    volumes:
+      # The media library. Without a volume here every deploy rebuilds
+      # the container and takes every client's uploads with it.
+      - cadence_media:/app/var/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    env_file: .env.production
+    volumes:
+      # Same volume as the app: the publisher reads the files the app
+      # wrote, so they have to be looking at the same disk.
+      - cadence_media:/app/var/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  cadence_postgres_data:
+  cadence_redis_data:
+  cadence_media:

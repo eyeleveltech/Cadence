@@ -1,0 +1,21 @@
+# BullMQ worker — publishing engine, token refresh, analytics sync.
+# Runs tsx directly rather than a separate build step; the worker is a
+# small set of scripts, not a bundled app.
+FROM node:22-alpine
+
+# ffmpeg for video transcoding, vips-dev headers for sharp
+RUN apk add --no-cache ffmpeg vips-dev
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+RUN npx prisma generate
+
+# Same media root as the app container; the compose file puts the same
+# volume behind both so the worker can read what the app wrote.
+ENV MEDIA_ROOT=/app/var/media
+RUN mkdir -p /app/var/media
+
+CMD ["npx", "tsx", "worker/index.ts"]

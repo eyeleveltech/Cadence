@@ -1,0 +1,9 @@
+Deliberately empty.
+
+Uploaded media does NOT live here — it goes to MEDIA_ROOT (default
+./var/media), outside the web root, and is served by app/api/media/[...key]
+after an access check. Anything placed in this folder is served statically
+to anyone with the URL, no session required.
+
+This file exists so the directory survives a clone: the Dockerfile copies
+public/ into the runtime image.

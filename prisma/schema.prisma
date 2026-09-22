@@ -1,0 +1,558 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── Auth (Better Auth) ─────────────────────────
+// Standard Better Auth tables, extended with our own fields/relations.
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  role          Role     @default(WRITER)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sessions Session[]
+  accounts Account[]
+
+  clientMemberships   ClientMember[]
+  assignedAsDesigner  Post[]              @relation("PostDesigner")
+  assignedAsWriter    Post[]              @relation("PostWriter")
+  createdPosts        Post[]              @relation("PostCreatedBy")
+  uploadedAssets      MediaAsset[]
+  moodBoardItemsAdded MoodBoardItem[]
+  commLogEntries      CommLog[]
+  approvalComments    ApprovalComment[]
+  notifications       Notification[]
+  auditLogEntries     AuditLog[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  userId                String
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  WRITER
+  DESIGNER
+  CLIENT_REVIEWER
+}
+
+// ───────────────────────── Client Workspace ─────────────────────────
+
+model Client {
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  logoUrl     String?
+  brandColors Json?
+  toneOfVoice String?
+  status      ClientStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  members        ClientMember[]
+  socialAccounts SocialAccount[]
+  campaigns      Campaign[]
+  posts          Post[]
+  mediaAssets    MediaAsset[]
+  moodBoards     MoodBoard[]
+  commLogs       CommLog[]
+
+  @@map("client")
+}
+
+enum ClientStatus {
+  ACTIVE
+  PAUSED
+  CHURNED
+}
+
+// Assigns a team member or client reviewer to a client workspace.
+// This is what scopes visibility — role itself stays global on User.
+model ClientMember {
+  id        String   @id @default(cuid())
+  clientId  String
+  userId    String
+  createdAt DateTime @default(now())
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, userId])
+  @@index([userId])
+}
+
+model SocialAccount {
+  id                 String           @id @default(cuid())
+  clientId           String
+  platform           Platform
+  accountName        String
+  avatarUrl          String?
+  externalAccountId  String
+  accessToken        String // encrypted at the application layer before write
+  refreshToken       String?
+  // Which kind of credential accessToken actually is. A PAGE token
+  // derived from a long-lived user token doesn't expire, and a
+  // SYSTEM_USER token belongs to the agency's business rather than to a
+  // person — so neither dies when someone changes their password. Only
+  // USER tokens have a meaningful tokenExpiresAt.
+  tokenType          TokenType        @default(USER)
+  tokenExpiresAt     DateTime?
+  connectionStatus   ConnectionStatus @default(CONNECTED)
+  // Why the connection is unhealthy, in the platform's own words —
+  // "permission removed" and "token expired" need different fixes.
+  statusDetail       String?
+  lastHealthCheckAt  DateTime?
+  scopes             String[]
+  connectedById      String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  scheduledJobs  ScheduledJob[]
+
+  @@unique([clientId, platform, externalAccountId])
+  // A Page or channel belongs to exactly one client workspace. Without
+  // this, the same Instagram account could be attached to two clients
+  // and both their plans would publish to it.
+  @@unique([platform, externalAccountId])
+  @@index([connectionStatus])
+}
+
+enum Platform {
+  INSTAGRAM
+  FACEBOOK
+  LINKEDIN
+  YOUTUBE
+}
+
+enum ConnectionStatus {
+  CONNECTED
+  // Token expired or about to — reconnecting fixes it.
+  NEEDS_RECONNECT
+  // The token is still valid but the asset was un-shared, or a scope was
+  // dropped. Reconnecting won't help; the client has to re-grant.
+  PERMISSION_MISSING
+  REVOKED
+}
+
+enum TokenType {
+  USER
+  PAGE
+  SYSTEM_USER
+}
+
+// Groups related posts — e.g. "TNPPL Season 2", "Onam Launch"
+model Campaign {
+  id          String    @id @default(cuid())
+  clientId    String
+  name        String
+  description String?
+  startDate   DateTime?
+  endDate     DateTime?
+  createdAt   DateTime  @default(now())
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  posts  Post[]
+
+  @@index([clientId])
+}
+
+// ───────────────────────── Library (Media) ─────────────────────────
+
+model MediaAsset {
+  id             String      @id @default(cuid())
+  clientId       String
+  uploadedById   String
+  originalKind   AssetKind
+  originalUrl    String // storage key/URL for the untouched upload
+  mimeType       String
+  fileSizeBytes  Int
+  width          Int?
+  height         Int?
+  durationSecs   Float?
+  status         AssetStatus @default(PROCESSING)
+  processingError String?
+  tags           String[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  client       Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  uploadedBy   User            @relation(fields: [uploadedById], references: [id])
+  variants     MediaVariant[]
+  postAssets   PostAsset[]
+  moodItems    MoodBoardItem[]
+
+  @@index([clientId, status])
+}
+
+enum AssetKind {
+  IMAGE
+  VIDEO
+}
+
+enum AssetStatus {
+  PROCESSING
+  READY
+  FAILED
+}
+
+// Derived, platform-ready renditions of a MediaAsset — generated by the
+// media pipeline (sharp/ffmpeg) since platform APIs reject non-conforming
+// media rather than adapting it themselves.
+model MediaVariant {
+  id            String      @id @default(cuid())
+  mediaAssetId  String
+  kind          VariantKind
+  url           String
+  width         Int?
+  height        Int?
+  fileSizeBytes Int?
+  createdAt     DateTime    @default(now())
+
+  mediaAsset MediaAsset @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+
+  @@unique([mediaAssetId, kind])
+}
+
+enum VariantKind {
+  FEED_JPEG // 4:5–1.91:1 JPEG, PNG/HEIC/WebP converted
+  STORY_9X16 // <=100MB, <=60s video or cropped image
+  REEL_MP4 // H.264/AAC, moov-front, <=300MB, <=15min
+  THUMBNAIL
+}
+
+// ───────────────────────── Plan (Posts) ─────────────────────────
+
+model Post {
+  id             String     @id @default(cuid())
+  clientId       String
+  campaignId     String?
+  title          String // internal reference label, not shown to platforms
+  brief          String?
+  status         PostStatus @default(IDEA)
+  platforms      Platform[]
+  caption        String?
+  hashtags       String[]
+  collaborators  String[] // up to 3 Instagram usernames — enforced in app logic
+  postAsStory    Boolean    @default(false)
+  scheduledAt    DateTime?  @db.Timestamptz(3)
+
+  assignedDesignerId String?
+  assignedWriterId   String?
+  createdById        String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  // When the post last *changed stage*, which is not the same as when it
+  // was last touched. Review-deadline chasing used to measure updatedAt,
+  // so fixing a typo on a post the client had ignored for a week reset
+  // the clock to zero.
+  statusChangedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  client            Client               @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  campaign          Campaign?            @relation(fields: [campaignId], references: [id])
+  assignedDesigner  User?                @relation("PostDesigner", fields: [assignedDesignerId], references: [id])
+  assignedWriter    User?                @relation("PostWriter", fields: [assignedWriterId], references: [id])
+  createdBy         User                 @relation("PostCreatedBy", fields: [createdById], references: [id])
+
+  assets             PostAsset[]
+  comments           ApprovalComment[]
+  scheduledJobs      ScheduledJob[]
+  analyticsSnapshots AnalyticsSnapshot[]
+  moodReferences     PostMoodReference[]
+
+  @@index([clientId, status])
+  @@index([scheduledAt])
+}
+
+enum PostStatus {
+  IDEA
+  BRIEFED
+  IN_DESIGN
+  IN_COPYWRITING
+  INTERNAL_REVIEW
+  REVISION
+  CLIENT_REVIEW
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  FAILED
+}
+
+model PostAsset {
+  id           String @id @default(cuid())
+  postId       String
+  mediaAssetId String
+  sortOrder    Int    @default(0)
+
+  post       Post       @relation(fields: [postId], references: [id], onDelete: Cascade)
+  mediaAsset MediaAsset @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, mediaAssetId])
+}
+
+model ApprovalComment {
+  id         String            @id @default(cuid())
+  postId     String
+  authorId   String
+  body       String
+  type       CommentType       @default(COMMENT)
+  // The client review portal shows only CLIENT comments. Internal craft
+  // discussion during INTERNAL_REVIEW happens on the same thread and is
+  // not something the client should be reading.
+  visibility CommentVisibility @default(INTERNAL)
+  createdAt  DateTime          @default(now())
+
+  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id])
+
+  @@index([postId])
+}
+
+enum CommentVisibility {
+  INTERNAL
+  CLIENT
+}
+
+enum CommentType {
+  COMMENT
+  APPROVAL
+  REVISION_REQUEST
+}
+
+// ───────────────────────── Boards (Mood Boards) ─────────────────────────
+
+model MoodBoard {
+  id        String   @id @default(cuid())
+  clientId  String
+  name      String
+  createdAt DateTime @default(now())
+
+  client Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  items  MoodBoardItem[]
+
+  @@index([clientId])
+}
+
+model MoodBoardItem {
+  id              String       @id @default(cuid())
+  moodBoardId     String
+  type            MoodItemType
+  sourceUrl       String? // Pinterest / YouTube / any external link
+  uploadedAssetId String? // set when uploaded directly rather than linked
+  thumbnailUrl    String?
+  title           String?
+  moodTags        String[]
+  addedById       String
+  createdAt       DateTime     @default(now())
+
+  moodBoard     MoodBoard           @relation(fields: [moodBoardId], references: [id], onDelete: Cascade)
+  uploadedAsset MediaAsset?         @relation(fields: [uploadedAssetId], references: [id], onDelete: Cascade)
+  addedBy       User                @relation(fields: [addedById], references: [id])
+  postRefs      PostMoodReference[]
+
+  @@index([moodBoardId])
+}
+
+enum MoodItemType {
+  IMAGE
+  VIDEO
+  URL
+  TEXT
+  COLOR
+}
+
+// Pins a mood board tile to a specific post as a design reference.
+model PostMoodReference {
+  id              String @id @default(cuid())
+  postId          String
+  moodBoardItemId String
+
+  post          Post          @relation(fields: [postId], references: [id], onDelete: Cascade)
+  moodBoardItem MoodBoardItem @relation(fields: [moodBoardItemId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, moodBoardItemId])
+}
+
+// ───────────────────────── Comms (Client Communication Log) ─────────────────────────
+
+model CommLog {
+  id              String   @id @default(cuid())
+  clientId        String
+  type            CommType
+  summary         String
+  actionItems     String[]
+  attachmentUrls  String[]
+  loggedById      String
+  occurredAt      DateTime
+  createdAt       DateTime @default(now())
+
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  loggedBy User   @relation(fields: [loggedById], references: [id])
+
+  @@index([clientId, occurredAt])
+}
+
+enum CommType {
+  CALL
+  WHATSAPP
+  EMAIL
+  MEETING
+  BRIEF_UPDATE
+}
+
+// ───────────────────────── Publishing Engine ─────────────────────────
+
+model ScheduledJob {
+  id              String    @id @default(cuid())
+  postId          String
+  socialAccountId String
+  platform        Platform
+  idempotencyKey  String    @unique
+  bullmqJobId     String?
+  status          JobStatus @default(QUEUED)
+  attempts        Int       @default(0)
+  platformPostId  String? // set once published; checked before any retry to prevent double-posting
+  errorLog        String?
+  scheduledFor    DateTime  @db.Timestamptz(3)
+  publishedAt     DateTime? @db.Timestamptz(3)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  post          Post          @relation(fields: [postId], references: [id], onDelete: Cascade)
+  socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id])
+
+  @@index([status, scheduledFor])
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  DONE
+  FAILED
+}
+
+model AnalyticsSnapshot {
+  id           String   @id @default(cuid())
+  postId       String
+  platform     Platform
+  reach        Int?
+  impressions  Int?
+  engagements  Int?
+  saves        Int?
+  shares       Int?
+  comments     Int?
+  likes        Int?
+  pulledAt     DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+}
+
+// ───────────────────────── Notifications & Audit ─────────────────────────
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String
+  link      String?
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  DESIGN_REQUESTED
+  COPY_REQUESTED
+  REVIEW_NEEDED
+  REVISION_REQUESTED
+  CLIENT_APPROVED
+  CLIENT_COMMENTED
+  APPROVAL_DEADLINE_SOON
+  APPROVAL_OVERDUE
+  POST_PUBLISHED
+  POST_FAILED
+  ACCOUNT_NEEDS_RECONNECT
+}
+
+// Append-only. Every sensitive action — token connect/disconnect, publish,
+// role change, deletion — gets a row here regardless of outcome.
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String
+  metadata   Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}

@@ -1,13 +1,18 @@
+import { dirname } from "path";
+import { fileURLToPath } from "url";
+import { FlatCompat } from "@eslint/eslintrc";
 import { defineConfig, globalIgnores } from "eslint/config";
-import nextVitals from "eslint-config-next/core-web-vitals";
-import nextTs from "eslint-config-next/typescript";
+
+// eslint-config-next's subpaths (core-web-vitals.js, typescript.js) still
+// ship legacy eslintrc-shaped objects ({ extends: [...] }), not flat-config
+// arrays — FlatCompat bridges the two, per Next.js's own recommended setup
+// for flat config until eslint-config-next publishes native flat exports.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const compat = new FlatCompat({ baseDirectory: __dirname });
 
 const eslintConfig = defineConfig([
-  ...nextVitals,
-  ...nextTs,
-  // Override default ignores of eslint-config-next.
+  ...compat.extends("next/core-web-vitals", "next/typescript"),
   globalIgnores([
-    // Default ignores of eslint-config-next:
     ".next/**",
     "out/**",
     "build/**",
