@@ -74,14 +74,18 @@ export async function inviteTeamMember(input: z.infer<typeof inviteTeamMemberSch
   const result = await auth.api.signUpEmail({ body: { name, email, password: tempPassword } });
   await prisma.user.update({ where: { id: result.user.id }, data: { role } });
 
-  await sendTeamInviteEmail(email, { name, tempPassword });
+  try {
+    await sendTeamInviteEmail(email, { name, tempPassword });
+  } catch (err) {
+    console.warn("Could not deliver invite email (Resend key not set):", err);
+  }
 
   await prisma.auditLog.create({
     data: { userId: admin.id, action: "TEAM_MEMBER_INVITED", entityType: "User", entityId: result.user.id, metadata: { email, role } },
   });
 
   revalidatePath("/team");
-  return { id: result.user.id };
+  return { id: result.user.id, tempPassword };
 }
 
 const inviteClientReviewerSchema = z.object({

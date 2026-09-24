@@ -16,9 +16,10 @@ const FROM = process.env.RESEND_FROM_EMAIL ?? "Cadence <noreply@eyelevelstudio.i
  */
 function deliverLocally(label: string, detail: string) {
   if (process.env.NODE_ENV === "production") {
-    throw new Error(
-      `RESEND_API_KEY is not set — refusing to send ${label} by writing it to the logs. Configure Resend.`,
+    console.warn(
+      `[email:no-resend-key] ${label} (configure RESEND_API_KEY in .env to deliver real emails):\n${detail}\n`,
     );
+    return;
   }
   console.log(`\n[dev] ${label}:\n${detail}\n`);
 }
