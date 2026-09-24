@@ -50,13 +50,21 @@ async function main() {
   if (existing) {
     // Already there — promote rather than fail, so this is safe to re-run
     // and doubles as "make this person an admin".
-    if (existing.role === "ADMIN") {
-      console.log(`${email} is already an admin. Nothing to do.`);
-      return;
+    if (existing.role !== "ADMIN") {
+      await prisma.user.update({ where: { id: existing.id }, data: { role: "ADMIN" } });
+      console.log(`Promoted ${email} from ${existing.role} to ADMIN.`);
     }
-    await prisma.user.update({ where: { id: existing.id }, data: { role: "ADMIN" } });
-    console.log(`Promoted existing account ${email} from ${existing.role} to ADMIN.`);
-    console.log("Their existing password is unchanged.");
+
+    // The bootstrap password is printed exactly once and stored only as a
+    // hash, so losing it used to mean deleting the account and starting
+    // again. Supplying ADMIN_PASSWORD on an existing account resets it.
+    if (provided) {
+      await resetPassword(existing.id, provided);
+      console.log(`Password reset for ${email}.`);
+    } else if (existing.role === "ADMIN") {
+      console.log(`${email} is already an admin. Nothing to do.`);
+      console.log("To reset a forgotten password, re-run with ADMIN_PASSWORD set.");
+    }
     return;
   }
 
@@ -83,6 +91,36 @@ async function main() {
     console.log("Save it now, then change it after signing in.");
   }
   console.log("");
+}
+
+/**
+ * Rewrites the credential row's password hash.
+ *
+ * Better Auth keeps the hash on the `account` table under the
+ * "credential" provider, not on the user — so this has to go through
+ * Better Auth's own hasher, or sign-in won't be able to verify it.
+ */
+async function resetPassword(userId: string, newPassword: string) {
+  const ctx = await auth.$context;
+  const hash = await ctx.password.hash(newPassword);
+
+  const credential = await prisma.account.findFirst({
+    where: { userId, providerId: "credential" },
+    select: { id: true },
+  });
+
+  if (credential) {
+    await prisma.account.update({ where: { id: credential.id }, data: { password: hash } });
+  } else {
+    // A magic-link-only account (a client reviewer) has no credential row
+    // at all; give it one so it can sign in with a password.
+    await prisma.account.create({
+      data: { userId, accountId: userId, providerId: "credential", password: hash },
+    });
+  }
+
+  // Existing sessions were issued against the old password.
+  await prisma.session.deleteMany({ where: { userId } });
 }
 
 main()
