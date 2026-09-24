@@ -1,29 +1,28 @@
-# VPS deployment: full stack. Postgres and Redis stay on the internal
-# network only — never publish their ports on a production host.
+# VPS deployment.
+#
+# DATABASE_URL points at a managed Postgres (Neon), so there is no
+# postgres service here — see docker-compose.selfhosted.yml if you ever
+# want to run the database on the box instead.
+#
+# Note there is no ${VAR} interpolation anywhere below. Compose expands
+# those at parse time from the shell or from a file named exactly `.env`
+# — NOT from `env_file:`, which only populates a container's own
+# environment. Mixing the two silently yields blank values: that is how
+# the postgres service ended up starting with no password and failing
+# its healthcheck. Everything here reads its configuration from
+# .env.production inside the container, where it actually belongs.
 services:
-  postgres:
-    image: postgres:17-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    volumes:
-      - cadence_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: redis-server --requirepass ${REDIS_PASSWORD}
+    env_file: .env.production
+    # $$ escapes the $ so Compose leaves it alone and the container's own
+    # shell expands REDIS_PASSWORD from env_file at runtime.
+    command: ["sh", "-c", 'exec redis-server --requirepass "$$REDIS_PASSWORD"']
     volumes:
       - cadence_redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
       interval: 5s
       timeout: 5s
       retries: 10
@@ -38,9 +37,6 @@ services:
     env_file: .env.production
     command: ["npx", "prisma", "migrate", "deploy"]
     restart: "no"
-    depends_on:
-      postgres:
-        condition: service_healthy
 
   app:
     build:
@@ -49,17 +45,17 @@ services:
     restart: unless-stopped
     env_file: .env.production
     ports:
-      # Bound to loopback on purpose. Apache terminates TLS and proxies
-      # to this; publishing 0.0.0.0:3000 would leave the app reachable
-      # directly over plain HTTP, bypassing the vhost and its certificate.
-      - "127.0.0.1:3000:3000"
+      # Loopback only: Apache terminates TLS and proxies to this.
+      # Publishing 0.0.0.0 would leave the app reachable over plain HTTP,
+      # bypassing the vhost and its certificate.
+      # Host port is 3001 because another app already holds 3000 on this
+      # VPS — change the left-hand number if that ever moves.
+      - "127.0.0.1:3001:3000"
     volumes:
-      # The media library. Without a volume here every deploy rebuilds
-      # the container and takes every client's uploads with it.
+      # Fallback media store, used only when the CLOUDINARY_* variables
+      # are absent. Keeps uploads off the container filesystem either way.
       - cadence_media:/app/var/media
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       migrate:
@@ -72,18 +68,13 @@ services:
     restart: unless-stopped
     env_file: .env.production
     volumes:
-      # Same volume as the app: the publisher reads the files the app
-      # wrote, so they have to be looking at the same disk.
       - cadence_media:/app/var/media
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
 
 volumes:
-  cadence_postgres_data:
   cadence_redis_data:
   cadence_media:

@@ -1,0 +1,40 @@
+# Overlay that runs Postgres on the box instead of using a managed one.
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.selfhosted.yml up -d --build
+#
+# DATABASE_URL must then point at the service name, e.g.
+#   postgresql://cadence:<password>@postgres:5432/cadence
+#
+# The container reads POSTGRES_* from .env.production directly rather
+# than through ${...} interpolation, for the reason explained in
+# docker-compose.prod.yml.
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    env_file: .env.production
+    volumes:
+      - cadence_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  cadence_postgres_data:
