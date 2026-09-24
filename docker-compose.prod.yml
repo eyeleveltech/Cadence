@@ -49,7 +49,10 @@ services:
     restart: unless-stopped
     env_file: .env.production
     ports:
-      - "3000:3000"
+      # Bound to loopback on purpose. Apache terminates TLS and proxies
+      # to this; publishing 0.0.0.0:3000 would leave the app reachable
+      # directly over plain HTTP, bypassing the vhost and its certificate.
+      - "127.0.0.1:3000:3000"
     volumes:
       # The media library. Without a volume here every deploy rebuilds
       # the container and takes every client's uploads with it.
