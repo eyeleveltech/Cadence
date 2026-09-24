@@ -8,7 +8,7 @@ import type { getPost } from "@/lib/actions/posts";
 import type { listMediaAssets } from "@/lib/actions/media";
 import {
   updatePostContent, updatePostStatus, attachAssetToPost, removeAssetFromPost, addApprovalComment,
-  deletePost,
+  deletePost, publishPostNow,
 } from "@/lib/actions/posts";
 import { setPostCampaign } from "@/lib/actions/campaigns";
 import { POST_STATUS_LABELS, POST_STATUS_ORDER, POST_STATUS_ADVANCE_SEQUENCE } from "@/lib/roles";
@@ -24,7 +24,7 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Instagram, Facebook, Linkedin, Youtube, X, Plus, Check, RotateCcw, Trash2 } from "lucide-react";
+import { Instagram, Facebook, Linkedin, Youtube, X, Plus, Check, RotateCcw, Trash2, Send } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import type { Platform } from "@prisma/client";
@@ -38,6 +38,13 @@ const PLATFORMS: { value: Platform; label: string; icon: typeof Instagram }[] = 
   { value: "LINKEDIN", label: "LinkedIn", icon: Linkedin },
   { value: "YOUTUBE", label: "YouTube", icon: Youtube },
 ];
+
+function getVideoPlayUrl(url: string): string {
+  if (url.includes("res.cloudinary.com")) {
+    return url.replace(/\.[^/.]+$/, ".mp4");
+  }
+  return url;
+}
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -65,6 +72,8 @@ export function PostEditor({
   const [platforms, setPlatforms] = useState<Platform[]>(post.platforms);
   const [postAsStory, setPostAsStory] = useState(post.postAsStory);
   const [saving, setSaving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
   const [commentBody, setCommentBody] = useState("");
   const [attachOpen, setAttachOpen] = useState(false);
 
@@ -164,6 +173,20 @@ export function PostEditor({
     if (ok) setCommentBody("");
   }
 
+  async function handleConfirmPublish() {
+    setPublishing(true);
+    try {
+      await publishPostNow(post.id);
+      setPublishConfirmOpen(false);
+      toast.success("Post published successfully!");
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Publishing failed");
+    } finally {
+      setPublishing(false);
+    }
+  }
+
   // Internal review is a manager's call — writers/designers can comment
   // but not approve their own work. Client-stage approval normally
   // happens through /review by the actual client; a manager can still
@@ -190,6 +213,59 @@ export function PostEditor({
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
+      <Dialog open={publishConfirmOpen} onOpenChange={setPublishConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="size-4 text-primary" /> Publish to Social Media
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2 text-sm">
+            <p className="text-[var(--ink2)]">
+              Publish <span className="font-semibold text-foreground">&ldquo;{post.title}&rdquo;</span> immediately to the selected channels:
+            </p>
+            <div className="flex flex-wrap gap-2 py-1">
+              {post.platforms.map((p) => {
+                const plat = PLATFORMS.find((x) => x.value === p);
+                const Icon = plat?.icon;
+                return (
+                  <span
+                    key={p}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-[var(--surface-hover)] px-2.5 py-1 text-xs font-medium text-foreground"
+                  >
+                    {Icon && <Icon className="size-3 text-primary" />}
+                    {plat?.label ?? p}
+                  </span>
+                );
+              })}
+            </div>
+            <p className="text-xs text-[var(--ink3)]">
+              This delivers the post immediately through the connected accounts or simulation sandbox.
+            </p>
+          </div>
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPublishConfirmOpen(false)}
+              disabled={publishing}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleConfirmPublish}
+              disabled={publishing}
+            >
+              <Send className="size-3.5" />
+              {publishing ? "Publishing…" : "Publish Now"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <div>
         <Link href={`/clients/${post.clientId}/plan`} className="text-xs text-[var(--ink3)] hover:underline">
           ← {post.client.name}
@@ -198,6 +274,17 @@ export function PostEditor({
           <h1 className="text-2xl font-bold tracking-tight">{post.title}</h1>
           <div className="flex items-center gap-2">
             <StatusChip status={post.status} />
+            {isLeadership && post.status !== "PUBLISHED" && post.platforms.length > 0 && (
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => setPublishConfirmOpen(true)}
+                disabled={publishing}
+              >
+                <Send className="size-3.5" />
+                Publish
+              </Button>
+            )}
             {nextStatus && (
               <Button size="sm" variant="outline" onClick={handleAdvance}>
                 Advance → {POST_STATUS_LABELS[nextStatus]}
@@ -249,13 +336,20 @@ export function PostEditor({
                 const thumb = pa.mediaAsset.variants.find((v) => v.kind === "THUMBNAIL");
                 return (
                   <div key={pa.id} className="group relative size-24 overflow-hidden rounded-xl border border-border bg-[var(--fill)]">
-                    {pa.mediaAsset.originalKind === "IMAGE" && (
+                    {pa.mediaAsset.originalKind === "IMAGE" ? (
                       <Image
                         src={thumb?.url ?? pa.mediaAsset.originalUrl}
                         alt=""
                         fill
                         className="object-cover"
                         unoptimized
+                      />
+                    ) : (
+                      <video
+                        src={getVideoPlayUrl(pa.mediaAsset.originalUrl)}
+                        className="size-full object-cover"
+                        muted
+                        playsInline
                       />
                     )}
                     <button
@@ -290,8 +384,10 @@ export function PostEditor({
                             onClick={() => handleAttach(asset.id)}
                             className="relative aspect-square overflow-hidden rounded-lg border border-border hover:ring-2 hover:ring-primary"
                           >
-                            {asset.originalKind === "IMAGE" && (
+                            {asset.originalKind === "IMAGE" ? (
                               <Image src={thumb?.url ?? asset.originalUrl} alt="" fill className="object-cover" unoptimized />
+                            ) : (
+                              <video src={getVideoPlayUrl(asset.originalUrl)} className="size-full object-cover" muted playsInline />
                             )}
                           </button>
                         );

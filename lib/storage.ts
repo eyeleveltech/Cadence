@@ -96,9 +96,87 @@ class LocalDiskStorage implements StorageAdapter {
   }
 }
 
-// TODO(Phase 2 infra): swap for an R2Storage implementation
-// (@aws-sdk/client-s3 pointed at the R2 S3-compatible endpoint) once
-// R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY are set. Use a
-// private bucket and keep serving through the media route, or sign
-// short-lived URLs — a public bucket puts us back where we started.
-export const storage: StorageAdapter = new LocalDiskStorage();
+import { v2 as cloudinary } from "cloudinary";
+
+function isCloudinaryConfigured(): boolean {
+  return Boolean(
+    process.env.CLOUDINARY_URL ||
+    (process.env.CLOUDINARY_CLOUD_NAME &&
+     process.env.CLOUDINARY_API_KEY &&
+     process.env.CLOUDINARY_API_SECRET)
+  );
+}
+
+class CloudinaryStorage implements StorageAdapter {
+  constructor() {
+    if (process.env.CLOUDINARY_CLOUD_NAME) {
+      cloudinary.config({
+        cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+        api_key: process.env.CLOUDINARY_API_KEY,
+        api_secret: process.env.CLOUDINARY_API_SECRET,
+        secure: true,
+      });
+    }
+  }
+
+  async save(key: string, data: Buffer, contentType: string): Promise<string> {
+    const cleanPublicId = `cadence/${key.replace(/\.[^/.]+$/, "")}`;
+    const resourceType = contentType.startsWith("video/") ? "video" : "image";
+
+    return new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          public_id: cleanPublicId,
+          resource_type: resourceType,
+          overwrite: true,
+          invalidate: true,
+        },
+        (error, result) => {
+          if (error || !result) {
+            return reject(error ?? new Error("Cloudinary upload failed"));
+          }
+          resolve(result.secure_url);
+        }
+      );
+      uploadStream.end(data);
+    });
+  }
+
+  async read(key: string): Promise<Buffer | null> {
+    try {
+      let url = key;
+      if (!key.startsWith("http")) {
+        const cleanPublicId = `cadence/${key.replace(/\.[^/.]+$/, "")}`;
+        url = cloudinary.url(cleanPublicId, { secure: true });
+      }
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const arrayBuf = await res.arrayBuffer();
+      return Buffer.from(arrayBuf);
+    } catch {
+      return null;
+    }
+  }
+
+  async delete(key: string): Promise<void> {
+    try {
+      const cleanPublicId = `cadence/${key.replace(/\.[^/.]+$/, "")}`;
+      await cloudinary.uploader.destroy(cleanPublicId);
+    } catch {
+      // idempotent
+    }
+  }
+
+  async deletePrefix(prefix: string): Promise<void> {
+    try {
+      await cloudinary.api.delete_resources_by_prefix(`cadence/${prefix}`);
+    } catch {
+      // idempotent
+    }
+  }
+}
+
+export const storage: StorageAdapter = isCloudinaryConfigured()
+  ? new CloudinaryStorage()
+  : new LocalDiskStorage();
+

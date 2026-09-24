@@ -23,7 +23,7 @@ export type ConnectedAccountSummary = {
   lastHealthCheckAt: Date | null;
   scopes: string[];
 };
-import { disconnectSocialAccount } from "@/lib/actions/social-accounts";
+import { disconnectSocialAccount, connectSandboxSocialAccount } from "@/lib/actions/social-accounts";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
@@ -126,6 +126,7 @@ export function ConnectedAccounts({
               ) : (
                 <ConnectControl
                   clientId={clientId}
+                  platform={platform}
                   routes={CONNECT_ROUTES[platform]}
                   configured={configured}
                   isLeadership={isLeadership}
@@ -149,14 +150,30 @@ export function ConnectedAccounts({
  * two paths use different credentials.
  */
 function ConnectControl({
-  clientId, routes, configured, isLeadership,
+  clientId, platform, routes, configured, isLeadership,
 }: {
   clientId: string;
+  platform: Platform;
   routes: { slug: string; label: string; hint: string }[];
   configured: Record<string, boolean>;
   isLeadership: boolean;
 }) {
+  const router = useRouter();
+  const [connectingSandbox, setConnectingSandbox] = useState(false);
   const available = routes.filter((r) => configured[r.slug]);
+
+  async function handleConnectSandbox() {
+    setConnectingSandbox(true);
+    try {
+      await connectSandboxSocialAccount(clientId, platform);
+      toast.success(`Sandbox ${PLATFORM_LABEL[platform]} account connected!`);
+      router.refresh();
+    } catch {
+      toast.error("Couldn't connect sandbox account");
+    } finally {
+      setConnectingSandbox(false);
+    }
+  }
 
   if (!isLeadership) {
     return (
@@ -171,26 +188,11 @@ function ConnectControl({
       <Button
         size="sm"
         variant="outline"
-        disabled
-        title="Add this platform's API credentials to .env to enable connecting"
+        onClick={handleConnectSandbox}
+        disabled={connectingSandbox}
+        title="Connect sandbox mock account for testing"
       >
-        Connect
-      </Button>
-    );
-  }
-
-  if (available.length === 1) {
-    return (
-      <Button
-        size="sm"
-        variant="outline"
-        // Navigates to an OAuth route, so it renders an <a>. Base UI
-        // warns unless we confirm that losing native button semantics is
-        // deliberate — a link here is the correct element, not a button.
-        nativeButton={false}
-        render={<a href={`/api/oauth/${available[0].slug}/connect?clientId=${clientId}`} />}
-      >
-        Connect
+        {connectingSandbox ? "Connecting…" : "Connect Sandbox"}
       </Button>
     );
   }
@@ -204,10 +206,6 @@ function ConnectControl({
         {available.map((route) => (
           <DropdownMenuItem
             key={route.slug}
-            // Rendering an <a> rather than the default <button>: this
-            // navigates to an OAuth route, and Base UI warns (rightly)
-            // that a non-button element loses native button semantics
-            // unless we say that's deliberate.
             nativeButton={false}
             render={<a href={`/api/oauth/${route.slug}/connect?clientId=${clientId}`} />}
             className="flex w-full flex-col items-start gap-0.5"
@@ -216,6 +214,14 @@ function ConnectControl({
             <span className="text-xs text-[var(--ink3)]">{route.hint}</span>
           </DropdownMenuItem>
         ))}
+        <DropdownMenuItem
+          onClick={handleConnectSandbox}
+          disabled={connectingSandbox}
+          className="flex w-full flex-col items-start gap-0.5 border-t border-border mt-1 pt-1.5"
+        >
+          <span className="text-sm font-medium text-primary">🧪 Connect Sandbox Account</span>
+          <span className="text-xs text-[var(--ink3)]">Test publishing immediately in simulation mode</span>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

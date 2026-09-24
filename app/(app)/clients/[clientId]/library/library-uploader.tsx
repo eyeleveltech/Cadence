@@ -29,8 +29,9 @@ export function LibraryUploader({ clientId }: { clientId: string }) {
         }
         result.failed.forEach((f) => toast.error(`${f.name}: ${f.reason}`));
         router.refresh();
-      } catch {
-        toast.error("Upload failed");
+      } catch (err) {
+        console.error("Upload error:", err);
+        toast.error(err instanceof Error ? err.message : "Upload failed");
       } finally {
         setUploading(false);
       }

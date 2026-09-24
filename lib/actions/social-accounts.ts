@@ -7,6 +7,7 @@ import { requireRole } from "@/lib/session";
 import { encryptToken } from "@/lib/crypto";
 import { getOAuthAdapter, isPlatformSlug, SLUG_TO_PLATFORM } from "@/lib/social/oauth";
 import { readPendingConnection, clearPendingConnection } from "@/lib/social/pending-connection";
+import type { Platform } from "@prisma/client";
 
 const disconnectSchema = z.object({
   clientId: z.string().cuid(),
@@ -157,3 +158,47 @@ export async function cancelPendingConnection(clientId: string) {
   await clearPendingConnection();
   revalidatePath(`/clients/${clientId}/settings`);
 }
+
+/**
+ * Connect a mock/sandbox social account for development or staging testing.
+ * Enables full end-to-end publishing tests before Meta App Review clearance.
+ */
+export async function connectSandboxSocialAccount(clientId: string, platform: Platform) {
+  const user = await requireRole("ADMIN", "MANAGER");
+  const platformName = platform.charAt(0) + platform.slice(1).toLowerCase();
+
+  await prisma.socialAccount.upsert({
+    where: {
+      clientId_platform_externalAccountId: {
+        clientId,
+        platform,
+        externalAccountId: `sandbox_${platform.toLowerCase()}_${clientId}`,
+      },
+    },
+    create: {
+      clientId,
+      platform,
+      externalAccountId: `sandbox_${platform.toLowerCase()}_${clientId}`,
+      accountName: `@EyeLevel_${platformName}_Sandbox`,
+      accessToken: encryptToken("simulated"),
+      refreshToken: null,
+      tokenExpiresAt: null,
+      tokenType: "PAGE",
+      scopes: ["pages_manage_posts", "instagram_content_publish"],
+      connectionStatus: "CONNECTED",
+      statusDetail: "Sandbox Dev Mode Account",
+      connectedById: user.id,
+      lastHealthCheckAt: new Date(),
+    },
+    update: {
+      accountName: `@EyeLevel_${platformName}_Sandbox`,
+      connectionStatus: "CONNECTED",
+      statusDetail: "Sandbox Dev Mode Account",
+      lastHealthCheckAt: new Date(),
+    },
+  });
+
+  revalidatePath(`/clients/${clientId}/settings`);
+  revalidatePath(`/clients/${clientId}/plan`);
+}
+

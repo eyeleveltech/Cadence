@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { requireClientAccess, requireClientWorkspaceAccess, isLeadership } from "@/lib/session";
 import { createNotification, notifyMany } from "@/lib/notify";
 import { refusePostStatusChange, STATUS_REFUSAL_MESSAGE } from "@/lib/roles";
+import { getSocialAdapter } from "@/lib/social/adapter";
 import type { Post, Role } from "@prisma/client";
 
 const postStatusSchema = z.enum([
@@ -180,8 +181,8 @@ const updatePostContentSchema = z.object({
   hashtags: z.array(z.string().min(1).max(50)).max(30).optional(),
   collaborators: z.array(z.string().min(1).max(30)).max(3).optional(),
   postAsStory: z.boolean().optional(),
-  assignedDesignerId: cuid.nullable().optional(),
-  assignedWriterId: cuid.nullable().optional(),
+  assignedDesignerId: z.string().nullable().optional(),
+  assignedWriterId: z.string().nullable().optional(),
 });
 
 export async function updatePostContent(input: z.infer<typeof updatePostContentSchema>) {
@@ -415,3 +416,137 @@ export async function deletePost(postId: string) {
 
   revalidatePath(`/clients/${post.clientId}/plan`);
 }
+
+/**
+ * Immediate publish trigger for leadership (Admin / Manager).
+ * Bypasses the 60s background worker queue and publishes directly via
+ * Meta Graph API adapters, or runs in simulation mode if enabled.
+ */
+export async function publishPostNow(postId: string) {
+  const { post, user } = await loadPostForWorkspace(postId);
+
+  if (!isLeadership(user.role)) {
+    throw new Error("Only admins and managers can trigger immediate publishing.");
+  }
+
+  if (post.status === "PUBLISHED") {
+    throw new Error("This post is already published.");
+  }
+
+  if (post.platforms.length === 0) {
+    throw new Error("Pick at least one platform before publishing.");
+  }
+
+  const fullPost = await prisma.post.findUniqueOrThrow({
+    where: { id: post.id },
+    include: { assets: { include: { mediaAsset: true } } },
+  });
+
+  const accounts = await prisma.socialAccount.findMany({
+    where: { clientId: post.clientId, platform: { in: post.platforms } },
+  });
+
+  const isSimulate = process.env.SOCIAL_DEV_SIMULATE === "1";
+  const results: { platform: string; ok: boolean; externalId?: string; error?: string }[] = [];
+
+  for (const platform of post.platforms) {
+    const found = accounts.find((a) => a.platform === platform);
+    const account = found ?? (isSimulate ? {
+      id: `sim_acc_${platform}`,
+      clientId: post.clientId,
+      platform,
+      accountName: `Demo ${platform}`,
+      avatarUrl: null,
+      externalAccountId: `sim_ext_${platform}`,
+      accessToken: "simulated",
+      refreshToken: null,
+      tokenExpiresAt: null,
+      tokenType: "PAGE" as const,
+      scopes: ["pages_manage_posts", "instagram_content_publish"],
+      connectionStatus: "CONNECTED" as const,
+      statusDetail: null,
+      lastHealthCheckAt: new Date(),
+      connectedById: user.id,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } : null);
+
+    if (!account) {
+      results.push({ platform, ok: false, error: `No connected account found for ${platform}.` });
+      continue;
+    }
+
+    const idempotencyKey = `${post.id}:${platform}`;
+
+    try {
+      const adapter = getSocialAdapter(platform);
+      const res = await adapter.publish({
+        caption: fullPost.caption ?? "",
+        hashtags: fullPost.hashtags,
+        mediaUrls: fullPost.assets.map((a) => a.mediaAsset.originalUrl),
+        postAsStory: fullPost.postAsStory,
+        account,
+      });
+
+      if (account.id && !account.id.startsWith("sim_")) {
+        await prisma.scheduledJob.upsert({
+          where: { idempotencyKey },
+          create: {
+            postId: post.id,
+            socialAccountId: account.id,
+            platform,
+            idempotencyKey,
+            scheduledFor: new Date(),
+            status: "DONE",
+            platformPostId: res.externalId,
+            publishedAt: new Date(),
+          },
+          update: {
+            status: "DONE",
+            platformPostId: res.externalId,
+            publishedAt: new Date(),
+          },
+        });
+      }
+
+      results.push({ platform, ok: true, externalId: res.externalId });
+    } catch (err) {
+      results.push({
+        platform,
+        ok: false,
+        error: err instanceof Error ? err.message : "Publish failed",
+      });
+    }
+  }
+
+  const anySuccess = results.some((r) => r.ok);
+  const anyFailed = results.some((r) => !r.ok);
+
+  if (!anySuccess && anyFailed) {
+    const reasons = results.map((r) => `${r.platform}: ${r.error}`).join(" | ");
+    throw new Error(`Failed to publish: ${reasons}`);
+  }
+
+  await prisma.post.update({
+    where: { id: post.id },
+    data: {
+      status: "PUBLISHED",
+      statusChangedAt: new Date(),
+    },
+  });
+
+  const interested = [post.createdById, post.assignedDesignerId, post.assignedWriterId]
+    .filter(Boolean) as string[];
+  await notifyMany(interested, {
+    type: "POST_PUBLISHED",
+    title: `Published: ${post.title}`,
+    body: `"${post.title}" has been published to ${post.platforms.join(", ")}.`,
+    link: `/posts/${post.id}`,
+  });
+
+  revalidatePath(`/posts/${post.id}`);
+  revalidatePath(`/clients/${post.clientId}/plan`);
+
+  return { success: true, results };
+}
+

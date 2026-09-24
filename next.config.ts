@@ -43,6 +43,13 @@ const nextConfig: NextConfig = {
   // production dependency subset the app actually needs into .next/standalone.
   output: "standalone",
 
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "500mb",
+    },
+    middlewareClientMaxBodySize: "500mb",
+  },
+
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

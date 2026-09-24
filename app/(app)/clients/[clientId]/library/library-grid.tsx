@@ -9,6 +9,13 @@ import { toast } from "sonner";
 
 type Asset = Awaited<ReturnType<typeof listMediaAssets>>[number];
 
+function getVideoPlayUrl(url: string): string {
+  if (url.includes("res.cloudinary.com")) {
+    return url.replace(/\.[^/.]+$/, ".mp4");
+  }
+  return url;
+}
+
 export function LibraryGrid({ clientId, assets }: { clientId: string; assets: Asset[] }) {
   const router = useRouter();
 
@@ -37,6 +44,7 @@ export function LibraryGrid({ clientId, assets }: { clientId: string; assets: As
         const thumb = asset.variants.find((v) => v.kind === "THUMBNAIL");
         const placed = asset._count.postAssets > 0;
         const filename = decodeURIComponent(asset.originalUrl.split("/").pop() ?? "file");
+        const playUrl = getVideoPlayUrl(asset.originalUrl);
 
         return (
           <div key={asset.id} className="overflow-hidden rounded-2xl border border-border bg-card">
@@ -50,6 +58,17 @@ export function LibraryGrid({ clientId, assets }: { clientId: string; assets: As
                   sizes="(min-width: 1280px) 33vw, (min-width: 640px) 50vw, 100vw"
                   unoptimized
                 />
+              ) : asset.originalKind === "VIDEO" && asset.originalUrl ? (
+                <video
+                  key={playUrl}
+                  controls
+                  className="size-full object-contain bg-black/90"
+                  preload="metadata"
+                  playsInline
+                >
+                  <source src={playUrl} type="video/mp4" />
+                  Your browser does not support the video tag.
+                </video>
               ) : (
                 <div className="flex h-full items-center justify-center">
                   <Film className="size-8 text-[var(--ink4)]" />
