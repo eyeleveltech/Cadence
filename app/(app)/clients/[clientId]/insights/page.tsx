@@ -16,7 +16,7 @@ const PLATFORM_ICON: Record<Platform, React.ComponentType<{ className?: string }
   INSTAGRAM: Instagram, FACEBOOK: Facebook, LINKEDIN: Linkedin, YOUTUBE: Youtube, TWITTER: XTwitterIcon,
 };
 const PLATFORM_LABEL: Record<Platform, string> = {
-  INSTAGRAM: "Instagram", FACEBOOK: "Facebook", LINKEDIN: "LinkedIn", YOUTUBE: "YouTube", TWITTER: "X (Twitter)",
+  INSTAGRAM: "Instagram", FACEBOOK: "Facebook", LINKEDIN: "LinkedIn", YOUTUBE: "YouTube", TWITTER: "Twitter",
 };
 
 function StatCard({ label, value }: { label: string; value: string }) {

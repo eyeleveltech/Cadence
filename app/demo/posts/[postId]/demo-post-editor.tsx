@@ -27,7 +27,7 @@ const PLATFORMS: { value: Platform; label: string; icon: React.ComponentType<{ c
   { value: "FACEBOOK", label: "Facebook", icon: Facebook },
   { value: "LINKEDIN", label: "LinkedIn", icon: Linkedin },
   { value: "YOUTUBE", label: "YouTube", icon: Youtube },
-  { value: "TWITTER", label: "X (Twitter)", icon: XTwitterIcon },
+  { value: "TWITTER", label: "Twitter", icon: XTwitterIcon },
 ];
 
 export function DemoPostEditor({ post: initial, clientName }: { post: DemoPost; clientName: string }) {

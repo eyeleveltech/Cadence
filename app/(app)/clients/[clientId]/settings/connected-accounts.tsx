@@ -35,7 +35,7 @@ import {
 import { toast } from "sonner";
 
 const PLATFORM_LABEL: Record<Platform, string> = {
-  INSTAGRAM: "Instagram", FACEBOOK: "Facebook", LINKEDIN: "LinkedIn", YOUTUBE: "YouTube", TWITTER: "X (Twitter)",
+  INSTAGRAM: "Instagram", FACEBOOK: "Facebook", LINKEDIN: "LinkedIn", YOUTUBE: "YouTube", TWITTER: "Twitter",
 };
 /**
  * How each platform can be connected. Instagram has two routes, because
