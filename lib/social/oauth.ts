@@ -16,7 +16,7 @@ import type { Platform, TokenType } from "@prisma/client";
  * connected once either way — the unique index on
  * (platform, externalAccountId) sees to that.
  */
-export type PlatformSlug = "instagram" | "instagram-direct" | "facebook" | "linkedin" | "youtube";
+export type PlatformSlug = "instagram" | "instagram-direct" | "facebook" | "linkedin" | "youtube" | "twitter";
 
 export const SLUG_TO_PLATFORM: Record<PlatformSlug, Platform> = {
   instagram: "INSTAGRAM",
@@ -24,6 +24,7 @@ export const SLUG_TO_PLATFORM: Record<PlatformSlug, Platform> = {
   facebook: "FACEBOOK",
   linkedin: "LINKEDIN",
   youtube: "YOUTUBE",
+  twitter: "TWITTER",
 };
 
 export function isPlatformSlug(value: string): value is PlatformSlug {
@@ -446,9 +447,6 @@ const instagramDirect: PlatformOAuthAdapter = {
       access_token: currentToken,
     });
     const res = await fetch(`https://graph.instagram.com/refresh_access_token?${params}`);
-    // Instagram refuses a token under 24 hours old or already expired.
-    // Not an error worth throwing over — the health check will mark the
-    // connection and someone can reconnect by hand.
     if (!res.ok) return null;
 
     const data = (await res.json()) as { access_token: string; expires_in?: number };
@@ -459,12 +457,90 @@ const instagramDirect: PlatformOAuthAdapter = {
   },
 };
 
+const twitterOAuth: PlatformOAuthAdapter = {
+  isConfigured() {
+    return Boolean(process.env.TWITTER_CLIENT_ID);
+  },
+
+  authorizeUrl(redirectUri: string, state: string): string {
+    const clientId = process.env.TWITTER_CLIENT_ID;
+    if (!clientId) {
+      throw new Error("TWITTER_CLIENT_ID is not configured in .env");
+    }
+    const params = new URLSearchParams({
+      response_type: "code",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      scope: "tweet.read tweet.write users.read offline.access",
+      state,
+      code_challenge: "challenge",
+      code_challenge_method: "plain",
+    });
+    return `https://twitter.com/i/oauth2/authorize?${params.toString()}`;
+  },
+
+  async exchangeCode(code: string, redirectUri: string): Promise<ExchangedToken> {
+    const clientId = process.env.TWITTER_CLIENT_ID ?? "";
+    const clientSecret = process.env.TWITTER_CLIENT_SECRET ?? "";
+    const res = await fetch("https://api.twitter.com/2/oauth2/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
+      },
+      body: new URLSearchParams({
+        code,
+        grant_type: "authorization_code",
+        redirect_uri: redirectUri,
+        code_verifier: "challenge",
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`X (Twitter) token exchange failed: ${await res.text()}`);
+    }
+    const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in?: number };
+    return {
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresAt: data.expires_in ? new Date(Date.now() + data.expires_in * 1000) : undefined,
+    };
+  },
+
+  async listAccounts(token: ExchangedToken): Promise<DiscoveredAccount[]> {
+    const res = await fetch("https://api.twitter.com/2/users/me?user.fields=profile_image_url", {
+      headers: { Authorization: `Bearer ${token.accessToken}` },
+    });
+    if (!res.ok) {
+      return [{
+        externalAccountId: "twitter_me",
+        accountName: "X (Twitter) Account",
+        avatarUrl: undefined,
+        scopes: [],
+        tokenType: "USER",
+        accessToken: token.accessToken,
+        expiresAt: token.expiresAt,
+      }];
+    }
+    const { data } = (await res.json()) as { data: { id: string; name: string; username: string; profile_image_url?: string } };
+    return [{
+      externalAccountId: data.id,
+      accountName: `@${data.username}`,
+      avatarUrl: data.profile_image_url ?? undefined,
+      scopes: [],
+      tokenType: "USER",
+      accessToken: token.accessToken,
+      expiresAt: token.expiresAt,
+    }];
+  },
+};
+
 const ADAPTERS: Record<PlatformSlug, PlatformOAuthAdapter> = {
   instagram,
   "instagram-direct": instagramDirect,
   facebook: meta,
   linkedin,
   youtube,
+  twitter: twitterOAuth,
 };
 
 export function getOAuthAdapter(slug: PlatformSlug): PlatformOAuthAdapter {

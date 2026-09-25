@@ -315,11 +315,45 @@ const youtubeAdapter: SocialAdapter = {
   },
 };
 
+const twitterAdapter: SocialAdapter = {
+  async publish(input) {
+    const accessToken = resolveAccessToken(input.account);
+    const message = formatMessage(input.caption, input.hashtags);
+
+    if (isSimulatedAccount(input.account, accessToken)) {
+      console.log(`[SIMULATION: X / Twitter @${input.account.accountName}] Publishing tweet:`, {
+        message,
+        mediaUrls: input.mediaUrls,
+      });
+      await new Promise((r) => setTimeout(r, 600));
+      return { externalId: `sim_x_${Date.now()}` };
+    }
+
+    const res = await fetch("https://api.twitter.com/2/tweets", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ text: message }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`X (Twitter) publish failed: ${err}`);
+    }
+
+    const data = (await res.json()) as { data?: { id?: string } };
+    return { externalId: data.data?.id || `x_${Date.now()}` };
+  },
+};
+
 const ADAPTERS: Record<Platform, SocialAdapter> = {
   INSTAGRAM: instagramAdapter,
   FACEBOOK: facebookAdapter,
   LINKEDIN: linkedinAdapter,
   YOUTUBE: youtubeAdapter,
+  TWITTER: twitterAdapter,
 };
 
 export function getSocialAdapter(platform: Platform): SocialAdapter {

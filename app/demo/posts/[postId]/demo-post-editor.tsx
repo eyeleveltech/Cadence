@@ -14,11 +14,20 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 
-const PLATFORMS: { value: Platform; label: string; icon: typeof Instagram }[] = [
+function XTwitterIcon({ className, ...props }: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" className={className} {...props}>
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 24.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+    </svg>
+  );
+}
+
+const PLATFORMS: { value: Platform; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { value: "INSTAGRAM", label: "Instagram", icon: Instagram },
   { value: "FACEBOOK", label: "Facebook", icon: Facebook },
   { value: "LINKEDIN", label: "LinkedIn", icon: Linkedin },
   { value: "YOUTUBE", label: "YouTube", icon: Youtube },
+  { value: "TWITTER", label: "X (Twitter)", icon: XTwitterIcon },
 ];
 
 export function DemoPostEditor({ post: initial, clientName }: { post: DemoPost; clientName: string }) {

@@ -11,7 +11,7 @@ const metric = z.coerce.number().int().min(0).optional();
 
 const logAnalyticsSchema = z.object({
   postId: z.string().cuid(),
-  platform: z.enum(["INSTAGRAM", "FACEBOOK", "LINKEDIN", "YOUTUBE"]),
+  platform: z.enum(["INSTAGRAM", "FACEBOOK", "LINKEDIN", "YOUTUBE", "TWITTER"]),
   reach: metric,
   impressions: metric,
   likes: metric,

@@ -11,11 +11,19 @@ import { Instagram, Facebook, Linkedin, Youtube } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 
-const PLATFORM_ICON: Record<Platform, typeof Instagram> = {
-  INSTAGRAM: Instagram, FACEBOOK: Facebook, LINKEDIN: Linkedin, YOUTUBE: Youtube,
+function XTwitterIcon({ className, ...props }: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" className={className} {...props}>
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 24.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+    </svg>
+  );
+}
+
+const PLATFORM_ICON: Record<Platform, React.ComponentType<{ className?: string }>> = {
+  INSTAGRAM: Instagram, FACEBOOK: Facebook, LINKEDIN: Linkedin, YOUTUBE: Youtube, TWITTER: XTwitterIcon,
 };
 const PLATFORM_LABEL: Record<Platform, string> = {
-  INSTAGRAM: "Instagram", FACEBOOK: "Facebook", LINKEDIN: "LinkedIn", YOUTUBE: "YouTube",
+  INSTAGRAM: "Instagram", FACEBOOK: "Facebook", LINKEDIN: "LinkedIn", YOUTUBE: "YouTube", TWITTER: "X (Twitter)",
 };
 
 const FIELDS = [

@@ -5,7 +5,21 @@ import { ROLE_LABELS } from "@/lib/roles";
 import { notFound } from "next/navigation";
 import { DemoConnectButton } from "./demo-connect-button";
 
-const PLATFORM_ICON = { INSTAGRAM: Instagram, FACEBOOK: Facebook, LINKEDIN: Linkedin, YOUTUBE: Youtube } as const;
+function XTwitterIcon({ className, ...props }: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" className={className} {...props}>
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 24.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+    </svg>
+  );
+}
+
+const PLATFORM_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
+  INSTAGRAM: Instagram,
+  FACEBOOK: Facebook,
+  LINKEDIN: Linkedin,
+  YOUTUBE: Youtube,
+  TWITTER: XTwitterIcon,
+};
 const TEAM = DEMO_USERS.filter((u) => u.role !== "ADMIN").slice(0, 3);
 
 export default async function DemoSettingsPage({ params }: { params: Promise<{ clientId: string }> }) {
@@ -26,7 +40,7 @@ export default async function DemoSettingsPage({ params }: { params: Promise<{ c
       <Card>
         <CardHeader><CardTitle className="text-base">Connected Platform Accounts</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          {(["INSTAGRAM", "FACEBOOK", "LINKEDIN", "YOUTUBE"] as const).map((platform) => {
+          {(["INSTAGRAM", "FACEBOOK", "LINKEDIN", "YOUTUBE", "TWITTER"] as const).map((platform) => {
             const Icon = PLATFORM_ICON[platform];
             return (
               <div key={platform} className="flex items-center justify-between rounded-lg border border-border p-3">

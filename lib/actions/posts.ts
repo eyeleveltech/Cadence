@@ -14,7 +14,7 @@ const postStatusSchema = z.enum([
   "IDEA", "BRIEFED", "IN_DESIGN", "IN_COPYWRITING", "INTERNAL_REVIEW",
   "REVISION", "CLIENT_REVIEW", "APPROVED", "SCHEDULED", "PUBLISHED", "FAILED",
 ]);
-const platformSchema = z.enum(["INSTAGRAM", "FACEBOOK", "LINKEDIN", "YOUTUBE"]);
+const platformSchema = z.enum(["INSTAGRAM", "FACEBOOK", "LINKEDIN", "YOUTUBE", "TWITTER"]);
 const cuid = z.string().cuid();
 
 /**

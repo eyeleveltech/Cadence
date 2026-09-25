@@ -35,7 +35,7 @@ import {
 import { toast } from "sonner";
 
 const PLATFORM_LABEL: Record<Platform, string> = {
-  INSTAGRAM: "Instagram", FACEBOOK: "Facebook", LINKEDIN: "LinkedIn", YOUTUBE: "YouTube",
+  INSTAGRAM: "Instagram", FACEBOOK: "Facebook", LINKEDIN: "LinkedIn", YOUTUBE: "YouTube", TWITTER: "X (Twitter)",
 };
 /**
  * How each platform can be connected. Instagram has two routes, because
@@ -59,8 +59,9 @@ const CONNECT_ROUTES: Record<Platform, { slug: string; label: string; hint: stri
   FACEBOOK: [{ slug: "facebook", label: "Connect", hint: "" }],
   LINKEDIN: [{ slug: "linkedin", label: "Connect", hint: "" }],
   YOUTUBE: [{ slug: "youtube", label: "Connect", hint: "" }],
+  TWITTER: [{ slug: "twitter", label: "Connect", hint: "" }],
 };
-const PLATFORMS = ["INSTAGRAM", "FACEBOOK", "LINKEDIN", "YOUTUBE"] as const satisfies readonly Platform[];
+const PLATFORMS = ["INSTAGRAM", "FACEBOOK", "LINKEDIN", "YOUTUBE", "TWITTER"] as const satisfies readonly Platform[];
 
 export function ConnectedAccounts({
   clientId,

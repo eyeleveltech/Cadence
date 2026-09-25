@@ -180,6 +180,7 @@ enum Platform {
   FACEBOOK
   LINKEDIN
   YOUTUBE
+  TWITTER
 }
 
 enum ConnectionStatus {
