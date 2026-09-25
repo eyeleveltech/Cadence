@@ -1,5 +1,7 @@
 import "server-only";
-import type { Platform, TokenType } from "@prisma/client";
+import type { Platform as PrismaPlatform, TokenType } from "@prisma/client";
+
+type Platform = PrismaPlatform | "TWITTER";
 
 /**
  * Instagram has two of these because Meta offers two entirely separate
