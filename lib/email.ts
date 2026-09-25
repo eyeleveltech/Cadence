@@ -4,7 +4,7 @@ const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
 
-const FROM = process.env.RESEND_FROM_EMAIL ?? "Cadence <noreply@eyelevelstudio.in>";
+const FROM = process.env.RESEND_FROM_EMAIL ?? "Cadence <noreply@theeyelevelstudio.com>";
 
 /**
  * With no Resend key configured, magic links and temp passwords print to
