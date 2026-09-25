@@ -152,3 +152,52 @@ export async function removeClientMember(input: z.infer<typeof removeMemberSchem
 
   revalidatePath(`/clients/${clientId}/settings`);
 }
+
+const removeTeamMemberSchema = z.object({
+  userId: z.string(),
+});
+
+/** Admin only — removes a person from the agency team and revokes all client access. */
+export async function removeTeamMember(input: z.infer<typeof removeTeamMemberSchema>) {
+  const admin = await requireRole("ADMIN");
+  const { userId } = removeTeamMemberSchema.parse(input);
+
+  if (userId === admin.id) {
+    throw new Error("You cannot remove your own admin account.");
+  }
+
+  const target = await prisma.user.findUnique({ where: { id: userId } });
+  if (!target) {
+    throw new Error("User not found.");
+  }
+
+  // Nullify or reassign any foreign key references
+  await prisma.auditLog.updateMany({ where: { userId }, data: { userId: null } });
+  await prisma.post.updateMany({ where: { assignedDesignerId: userId }, data: { assignedDesignerId: null } });
+  await prisma.post.updateMany({ where: { assignedWriterId: userId }, data: { assignedWriterId: null } });
+  await prisma.post.updateMany({ where: { createdById: userId }, data: { createdById: admin.id } });
+  await prisma.mediaAsset.updateMany({ where: { uploadedById: userId }, data: { uploadedById: admin.id } });
+  await prisma.moodBoardItem.updateMany({ where: { addedById: userId }, data: { addedById: admin.id } });
+  await prisma.commLog.updateMany({ where: { loggedById: userId }, data: { loggedById: admin.id } });
+  await prisma.approvalComment.updateMany({ where: { authorId: userId }, data: { authorId: admin.id } });
+  await prisma.clientMember.deleteMany({ where: { userId } });
+  await prisma.notification.deleteMany({ where: { userId } });
+  await prisma.session.deleteMany({ where: { userId } });
+  await prisma.account.deleteMany({ where: { userId } });
+
+  await prisma.user.delete({ where: { id: userId } });
+
+  await prisma.auditLog.create({
+    data: {
+      userId: admin.id,
+      action: "TEAM_MEMBER_REMOVED",
+      entityType: "User",
+      entityId: userId,
+      metadata: { email: target.email, name: target.name, role: target.role },
+    },
+  });
+
+  revalidatePath("/team");
+  return { success: true };
+}
+

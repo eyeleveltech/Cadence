@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Role } from "@prisma/client";
-import { listAllUsers, updateUserRole, inviteTeamMember } from "@/lib/actions/team";
+import { listAllUsers, updateUserRole, inviteTeamMember, removeTeamMember } from "@/lib/actions/team";
 import { ROLE_LABELS } from "@/lib/roles";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { format } from "date-fns";
-import { Plus } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 type User = Awaited<ReturnType<typeof listAllUsers>>[number];
@@ -32,6 +32,8 @@ export function TeamRoster({
   const router = useRouter();
   const isAdmin = currentUser.role === "ADMIN";
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const handleRoleChange = useCallback(async (userId: string, role: TeamRole) => {
     try {
@@ -42,6 +44,21 @@ export function TeamRoster({
       toast.error(err instanceof Error ? err.message : "Couldn't update role");
     }
   }, [router]);
+
+  const handleDeleteUser = useCallback(async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await removeTeamMember({ userId: deleteTarget.id });
+      toast.success(`Removed ${deleteTarget.name} from the team`);
+      setDeleteTarget(null);
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't remove member");
+    } finally {
+      setDeleting(false);
+    }
+  }, [deleteTarget, router]);
 
   return (
     <div className="space-y-2">
@@ -77,12 +94,25 @@ export function TeamRoster({
                 Joined {format(user.createdAt, "d MMM yyyy")}
               </span>
               {isAdmin ? (
-                <Select items={ROLE_LABELS} value={user.role} onValueChange={(v) => v && handleRoleChange(user.id, v as TeamRole)}>
-                  <SelectTrigger className="h-8 w-[136px] text-xs"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {TEAM_ROLES.map((r) => <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center gap-1.5">
+                  <Select items={ROLE_LABELS} value={user.role} onValueChange={(v) => v && handleRoleChange(user.id, v as TeamRole)}>
+                    <SelectTrigger className="h-8 w-[136px] text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {TEAM_ROLES.map((r) => <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  {user.id !== currentUser.id && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-[var(--ink4)] hover:bg-red-50 hover:text-red-600 transition-colors"
+                      onClick={() => setDeleteTarget(user)}
+                      title={`Remove ${user.name}`}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  )}
+                </div>
               ) : (
                 <span className="om-pill">{ROLE_LABELS[user.role]}</span>
               )}
@@ -95,9 +125,33 @@ export function TeamRoster({
           No one is on the team yet.
         </p>
       )}
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove {deleteTarget?.name}?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-[var(--ink3)]">
+            This will permanently remove <strong>{deleteTarget?.name}</strong> ({deleteTarget?.email}) from the Cadence team and revoke all their workspace access.
+          </p>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={handleDeleteUser}
+              disabled={deleting}
+            >
+              {deleting ? "Removing…" : "Remove member"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
+
 
 function InviteDialog({
   open, onOpenChange, onInvited,
