@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import type { AnalyticsSnapshot, Platform } from "@prisma/client";
+import type { AnalyticsSnapshot, Platform as PrismaPlatform } from "@prisma/client";
+
+type Platform = PrismaPlatform | "TWITTER";
 import { logPostAnalytics } from "@/lib/actions/analytics";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";

@@ -3,7 +3,9 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Instagram, Facebook, Linkedin, Youtube, Check, RotateCcw } from "lucide-react";
-import type { Platform, PostStatus } from "@prisma/client";
+import type { Platform as PrismaPlatform, PostStatus } from "@prisma/client";
+
+type Platform = PrismaPlatform | "TWITTER";
 import type { DemoPost } from "@/lib/demo/data";
 import { POST_STATUS_LABELS, POST_STATUS_ADVANCE_SEQUENCE } from "@/lib/roles";
 import { StatusChip } from "@/components/status-ring";

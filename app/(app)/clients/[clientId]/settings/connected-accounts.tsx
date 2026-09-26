@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import type { Platform, ConnectionStatus, TokenType } from "@prisma/client";
+import type { Platform as PrismaPlatform, ConnectionStatus, TokenType } from "@prisma/client";
+
+type Platform = PrismaPlatform | "TWITTER";
 import { STATUS_LABEL } from "@/lib/social/health";
 
 /**

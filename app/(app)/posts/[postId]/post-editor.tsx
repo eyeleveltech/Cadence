@@ -27,7 +27,9 @@ import {
 import { Instagram, Facebook, Linkedin, Youtube, X, Plus, Check, RotateCcw, Trash2, Send } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
-import type { Platform } from "@prisma/client";
+import type { Platform as PrismaPlatform } from "@prisma/client";
+
+type Platform = PrismaPlatform | "TWITTER";
 
 type Post = Awaited<ReturnType<typeof getPost>>;
 type LibraryAsset = Awaited<ReturnType<typeof listMediaAssets>>[number];

@@ -2,7 +2,9 @@ import Link from "next/link";
 import { BarChart3, Instagram, Facebook, Linkedin, Youtube } from "lucide-react";
 import { format } from "date-fns";
 import { getClientAnalyticsOverview } from "@/lib/actions/analytics";
-import type { Platform } from "@prisma/client";
+import type { Platform as PrismaPlatform } from "@prisma/client";
+
+type Platform = PrismaPlatform | "TWITTER";
 
 function XTwitterIcon({ className, ...props }: React.SVGProps<SVGSVGElement>) {
   return (
