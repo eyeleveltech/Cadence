@@ -1,9 +1,10 @@
+import Link from "next/link";
 import { requireUser } from "@/lib/session";
 import { listClientsForCurrentUser } from "@/lib/actions/clients";
 import { ROLE_LABELS } from "@/lib/roles";
-import { SignOutButton } from "@/components/sign-out-button";
 import { AppNav } from "@/components/app-nav";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { SignOutButton } from "@/components/sign-out-button";
 
 export async function AppShell({ children }: { children: React.ReactNode }) {
   const [user, clients] = await Promise.all([requireUser(), listClientsForCurrentUser()]);
@@ -38,16 +39,26 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
 
         <AppNav clients={clients} isLeadership={user.role === "ADMIN" || user.role === "MANAGER"} />
 
-        <div className="mt-auto flex shrink-0 items-center gap-2.5 rounded-lg border border-transparent px-1.5 py-1.5 transition-colors hover:border-border hover:bg-card">
-          <Avatar className="size-7 border border-border bg-white">
-            <AvatarFallback className="bg-transparent text-[10px] font-semibold text-[var(--ink2)]">
-              {initials}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex min-w-0 flex-col leading-[15px]">
-            <span className="truncate text-sm font-medium">{user.name}</span>
-            <span className="om-mono text-[var(--ink3)]">{ROLE_LABELS[user.role as keyof typeof ROLE_LABELS]}</span>
-          </div>
+        <div className="mt-auto flex shrink-0 items-center gap-2.5 rounded-lg border border-transparent px-1.5 py-1.5 transition-colors hover:border-border hover:bg-card group">
+          <Link
+            href="/profile"
+            className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+            title="Account & Security"
+          >
+            <Avatar className="size-7 border border-border bg-white transition-transform group-hover:scale-105">
+              <AvatarFallback className="bg-transparent text-[10px] font-semibold text-[var(--ink2)]">
+                {initials}
+              </AvatarFallback>
+            </Avatar>
+            <div className="flex min-w-0 flex-col leading-[15px]">
+              <span className="truncate text-sm font-medium group-hover:underline group-hover:underline-offset-2">
+                {user.name}
+              </span>
+              <span className="om-mono text-[var(--ink3)]">
+                {ROLE_LABELS[user.role as keyof typeof ROLE_LABELS] ?? user.role}
+              </span>
+            </div>
+          </Link>
           <div className="ml-auto">
             <SignOutButton />
           </div>

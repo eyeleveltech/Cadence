@@ -6,7 +6,7 @@ import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
-import { requireRole } from "@/lib/session";
+import { requireRole, requireUser } from "@/lib/session";
 import { sendTeamInviteEmail } from "@/lib/email";
 import type { Role } from "@prisma/client";
 
@@ -271,6 +271,87 @@ export async function removeTeamMember(input: z.infer<typeof removeTeamMemberSch
   });
 
   revalidatePath("/team");
+  return { success: true };
+}
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, "Current password is required"),
+  newPassword: z.string().min(10, "New password must be at least 10 characters long"),
+});
+
+/** Changes the currently signed-in user's password using Better Auth. */
+export async function changeCurrentUserPassword(input: z.infer<typeof changePasswordSchema>) {
+  const { currentPassword, newPassword } = changePasswordSchema.parse(input);
+  await requireUser();
+
+  try {
+    await auth.api.changePassword({
+      body: {
+        currentPassword,
+        newPassword,
+      },
+      headers: await headers(),
+    });
+    return { success: true };
+  } catch (err: any) {
+    throw new Error(err.message ?? "Failed to change password. Please check your current password.");
+  }
+}
+
+/** Sends a secure password reset link to the currently signed-in user's email. */
+export async function sendPasswordResetForCurrentUser() {
+  const user = await requireUser();
+  const token = randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+  await prisma.verification.create({
+    data: {
+      identifier: `reset-password:${token}`,
+      value: user.id,
+      expiresAt,
+    },
+  });
+
+  const baseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
+  const setupUrl = `${baseUrl}/set-password?token=${token}`;
+
+  await sendTeamInviteEmail(user.email, { name: user.name, setupUrl });
+
+  return { success: true, email: user.email };
+}
+
+/** Sends a password reset link for any registered work email (public / forgot password). */
+export async function requestForgotPassword(email: string) {
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail) throw new Error("Email is required.");
+
+  const user = await prisma.user.findUnique({
+    where: { email: cleanEmail },
+    select: { id: true, name: true, email: true },
+  });
+
+  if (user) {
+    const token = randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    await prisma.verification.create({
+      data: {
+        identifier: `reset-password:${token}`,
+        value: user.id,
+        expiresAt,
+      },
+    });
+
+    const baseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
+    const setupUrl = `${baseUrl}/set-password?token=${token}`;
+
+    try {
+      await sendTeamInviteEmail(user.email, { name: user.name, setupUrl });
+    } catch (err) {
+      console.warn("Could not deliver reset email:", err);
+    }
+  }
+
   return { success: true };
 }
 

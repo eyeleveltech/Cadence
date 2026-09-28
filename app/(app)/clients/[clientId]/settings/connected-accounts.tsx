@@ -210,7 +210,13 @@ function ConnectControl({
           <DropdownMenuItem
             key={route.slug}
             nativeButton={false}
-            render={<a href={`/api/oauth/${route.slug}/connect?clientId=${clientId}`} />}
+            render={
+              <a
+                href={`/api/oauth/${route.slug}/connect?clientId=${clientId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              />
+            }
             className="flex w-full flex-col items-start gap-0.5"
           >
             <span className="text-sm font-medium">{route.label}</span>
