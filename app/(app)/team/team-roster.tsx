@@ -169,12 +169,8 @@ function InviteDialog({
     if (!name.trim() || !email.trim()) return;
     setSaving(true);
     try {
-      const res = await inviteTeamMember({ name: name.trim(), email: email.trim(), role });
-      if (res?.tempPassword) {
-        toast.success(`Invited ${name.trim()}! Temp password: ${res.tempPassword}`, { duration: 15000 });
-      } else {
-        toast.success(`Invited ${name.trim()} — sign-in details sent`);
-      }
+      await inviteTeamMember({ name: name.trim(), email: email.trim(), role });
+      toast.success(`Invite sent! Password setup link emailed to ${email.trim()}`);
       setName("");
       setEmail("");
       setRole("WRITER");

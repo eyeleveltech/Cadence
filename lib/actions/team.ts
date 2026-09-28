@@ -60,9 +60,8 @@ const inviteTeamMemberSchema = z.object({
   role: z.enum(TEAM_ROLES),
 });
 
-/** Creates a real sign-in account (email + a one-time temp password,
- * mirroring exactly how the seed script provisions the team) and emails
- * it. Admin only. */
+/** Creates a team account and sends a secure 7-day password setup link.
+ * Admin only. */
 export async function inviteTeamMember(input: z.infer<typeof inviteTeamMemberSchema>) {
   const admin = await requireRole("ADMIN");
   const { name, email, role } = inviteTeamMemberSchema.parse(input);
@@ -70,12 +69,28 @@ export async function inviteTeamMember(input: z.infer<typeof inviteTeamMemberSch
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) throw new Error("Someone with that email already has an account.");
 
-  const tempPassword = randomBytes(9).toString("base64url");
-  const result = await auth.api.signUpEmail({ body: { name, email, password: tempPassword } });
+  // Generate an unguessable initial password to provision the account
+  const initialPassword = randomBytes(24).toString("base64url");
+  const result = await auth.api.signUpEmail({ body: { name, email, password: initialPassword } });
   await prisma.user.update({ where: { id: result.user.id }, data: { role } });
 
+  // Generate a cryptographically secure token for password setup (expires in 7 days)
+  const token = randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+  await prisma.verification.create({
+    data: {
+      identifier: `reset-password:${token}`,
+      value: result.user.id,
+      expiresAt,
+    },
+  });
+
+  const baseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
+  const setupUrl = `${baseUrl}/set-password?token=${token}`;
+
   try {
-    await sendTeamInviteEmail(email, { name, tempPassword });
+    await sendTeamInviteEmail(email, { name, setupUrl });
   } catch (err) {
     console.warn("Could not deliver invite email (Resend key not set):", err);
   }
@@ -85,7 +100,65 @@ export async function inviteTeamMember(input: z.infer<typeof inviteTeamMemberSch
   });
 
   revalidatePath("/team");
-  return { id: result.user.id, tempPassword };
+  return { id: result.user.id, email, name };
+}
+
+/** Verifies that an activation or password setup token is valid and unexpired.
+ * Public endpoint used when the invited user opens the setup link. */
+export async function verifyInviteToken(token: string) {
+  if (!token || typeof token !== "string") return { valid: false as const };
+
+  const verification = await prisma.verification.findFirst({
+    where: { identifier: `reset-password:${token}` },
+  });
+
+  if (!verification || verification.expiresAt < new Date()) {
+    return { valid: false as const };
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: verification.value },
+    select: { name: true, email: true },
+  });
+
+  if (!user) return { valid: false as const };
+
+  return { valid: true as const, name: user.name, email: user.email };
+}
+
+const setPasswordSchema = z.object({
+  token: z.string().min(1),
+  newPassword: z.string().min(10, "Password must be at least 10 characters long"),
+});
+
+/** Sets the user's password using the activation token and invalidates the token. */
+export async function setPasswordWithInviteToken(input: z.infer<typeof setPasswordSchema>) {
+  const { token, newPassword } = setPasswordSchema.parse(input);
+
+  const verification = await prisma.verification.findFirst({
+    where: { identifier: `reset-password:${token}` },
+  });
+
+  if (!verification || verification.expiresAt < new Date()) {
+    throw new Error("This activation link is invalid or has expired.");
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: verification.value },
+    select: { id: true, email: true },
+  });
+
+  if (!user) throw new Error("Account not found.");
+
+  // Better Auth consumes the verification row and securely hashes and saves the new password
+  await auth.api.resetPassword({
+    body: {
+      token,
+      newPassword,
+    },
+  });
+
+  return { success: true, email: user.email };
 }
 
 const inviteClientReviewerSchema = z.object({

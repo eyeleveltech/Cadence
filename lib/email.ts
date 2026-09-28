@@ -57,14 +57,14 @@ export async function sendMagicLinkEmail(to: string, url: string) {
 /** Sent when an admin invites a new team member. */
 export async function sendTeamInviteEmail(
   to: string,
-  { name, tempPassword }: { name: string; tempPassword: string },
+  { name, setupUrl }: { name: string; setupUrl: string },
 ) {
-  const loginUrl = `${process.env.BETTER_AUTH_URL ?? "http://localhost:3000"}/login`;
+  const safeSetupUrl = escapeHtml(setupUrl);
 
   if (!resend) {
     deliverLocally(
       `Cadence invite for ${to} (${name})`,
-      `  temp password: ${tempPassword}\n  sign in at: ${loginUrl}`,
+      `  set password at: ${setupUrl}`,
     );
     return;
   }
@@ -72,12 +72,32 @@ export async function sendTeamInviteEmail(
   await resend.emails.send({
     from: FROM,
     to,
-    subject: "You're in — Cadence access",
+    subject: "Welcome to Cadence — Set up your account",
     html: `
-      <p>Hi ${escapeHtml(name)}, you've been added to Cadence, EyeLevel's planning tool.</p>
-      <p>Sign in at <a href="${escapeHtml(loginUrl)}">${escapeHtml(loginUrl)}</a> on the Team tab with:</p>
-      <p>Email: ${escapeHtml(to)}<br>Temporary password: <strong>${escapeHtml(tempPassword)}</strong></p>
-      <p>Change it once you're in.</p>
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 36px 28px; background-color: #FAF9F7; border: 1px solid #E5E2DC; border-radius: 12px; color: #211D1A;">
+        <div style="font-size: 22px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 24px; color: #211D1A;">Cadence</div>
+        <h2 style="font-size: 20px; font-weight: 600; margin: 0 0 16px 0; color: #211D1A; letter-spacing: -0.3px;">Welcome to the team, ${escapeHtml(name)}</h2>
+        <p style="font-size: 15px; line-height: 1.6; color: #57534E; margin: 0 0 20px 0;">
+          You've been invited to join <strong>Cadence</strong>, EyeLevel's social media planning and publishing workspace.
+        </p>
+        <p style="font-size: 15px; line-height: 1.6; color: #57534E; margin: 0 0 28px 0;">
+          Click below to set your password and access your workspace:
+        </p>
+        <div style="margin-bottom: 32px;">
+          <a href="${safeSetupUrl}" style="display: inline-block; background-color: #211D1A; color: #ffffff; text-decoration: none; padding: 13px 30px; border-radius: 8px; font-size: 15px; font-weight: 600;">
+            Set Password &amp; Get Started &rarr;
+          </a>
+        </div>
+        <p style="font-size: 13px; line-height: 1.5; color: #A8A29E; margin: 0 0 6px 0;">
+          Button not working? Copy and paste this link into your browser:
+        </p>
+        <p style="font-size: 13px; line-height: 1.5; color: #78716C; word-break: break-all; margin: 0 0 24px 0;">
+          <a href="${safeSetupUrl}" style="color: #78716C; text-decoration: underline;">${safeSetupUrl}</a>
+        </p>
+        <div style="border-top: 1px solid #E5E2DC; padding-top: 20px; font-size: 12px; color: #A8A29E; line-height: 1.5;">
+          This link will expire in 7 days. If you were not expecting this invitation, you can safely ignore this email.
+        </div>
+      </div>
     `,
   });
 }
