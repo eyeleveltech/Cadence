@@ -20,6 +20,16 @@ export const auth = betterAuth({
   }),
   secret: process.env.BETTER_AUTH_SECRET,
   baseURL: process.env.BETTER_AUTH_URL,
+  trustedOrigins: [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:*",
+    "http://127.0.0.1:*",
+    "http://192.168.*:*",
+    "https://cadence.theeyelevelstudio.com",
+    "http://cadence.theeyelevelstudio.com",
+    ...(process.env.BETTER_AUTH_URL ? [process.env.BETTER_AUTH_URL] : []),
+  ],
   // Enabled so admins can provision accounts server-side (inviteTeamMember,
   // prisma/seed.ts) and so invited people can sign in. It is NOT open
   // registration: the public sign-up endpoint is refused in
