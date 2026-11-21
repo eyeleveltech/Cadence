@@ -55,8 +55,8 @@ function LoginForm() {
       await requestForgotPassword(forgotEmail.trim());
       setForgotSent(true);
       toast.success("If an account exists, a password reset link has been emailed!");
-    } catch {
-      toast.error("Could not send reset link. Please try again.");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Could not send reset link. Please try again.");
     } finally {
       setForgotSending(false);
     }
@@ -65,29 +65,39 @@ function LoginForm() {
   async function handleTeamLogin(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    const { error } = await authClient.signIn.email({ email, password });
-    setLoading(false);
-    if (error) {
-      toast.error(error.message ?? "Couldn't sign in — check your email and password.");
-      return;
+    try {
+      const { error } = await authClient.signIn.email({ email, password });
+      setLoading(false);
+      if (error) {
+        toast.error(error.message ?? "Couldn't sign in — check your email and password.");
+        return;
+      }
+      router.push(next);
+      router.refresh();
+    } catch (err) {
+      setLoading(false);
+      toast.error(err instanceof Error ? err.message : "Unable to reach the server. Please ensure the development server is running.");
     }
-    router.push(next);
-    router.refresh();
   }
 
   async function handleMagicLink(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    const { error } = await authClient.signIn.magicLink({
-      email: magicEmail,
-      callbackURL: next,
-    });
-    setLoading(false);
-    if (error) {
-      toast.error(error.message ?? "Couldn't send the link.");
-      return;
+    try {
+      const { error } = await authClient.signIn.magicLink({
+        email: magicEmail,
+        callbackURL: next,
+      });
+      setLoading(false);
+      if (error) {
+        toast.error(error.message ?? "Couldn't send the link.");
+        return;
+      }
+      setMagicSent(true);
+    } catch (err) {
+      setLoading(false);
+      toast.error(err instanceof Error ? err.message : "Unable to reach the server. Please ensure the development server is running.");
     }
-    setMagicSent(true);
   }
 
   return (

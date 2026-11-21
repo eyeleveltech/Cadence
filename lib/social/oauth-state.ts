@@ -1,10 +1,33 @@
 import "server-only";
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHmac, createHash, randomBytes, timingSafeEqual } from "crypto";
 import type { PlatformSlug } from "./oauth";
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 
-type StatePayload = { clientId: string; platform: PlatformSlug; sid: string; ts: number };
+export type StatePayload = {
+  clientId: string;
+  platform: PlatformSlug;
+  sid: string;
+  ts: number;
+  codeVerifier?: string;
+  returnTo?: string;
+};
+
+/**
+ * Generates an RFC 7636-compliant high-entropy cryptographic code verifier.
+ * 32 random bytes produces a 43-character base64url string (valid range: 43-128 chars).
+ */
+export function generateCodeVerifier(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+/**
+ * Computes the S256 code challenge for an RFC 7636 code verifier:
+ * BASE64URL(SHA256(ASCII(code_verifier))).
+ */
+export function generateCodeChallenge(verifier: string): string {
+  return createHash("sha256").update(verifier).digest("base64url");
+}
 
 function sign(data: string): string {
   const secret = process.env.BETTER_AUTH_SECRET;
@@ -17,15 +40,25 @@ function sign(data: string): string {
  * clean up, and a tampered clientId/platform fails verification instead
  * of silently connecting the wrong client's account.
  *
- * The session id is in the payload and checked on the way back, which is
- * the part that makes this a CSRF token rather than a signature. Signed
- * with a server-wide secret alone, any state minted by any admin was
- * valid in anyone's callback for the next ten minutes — long enough to
- * walk an admin onto a callback URL carrying someone else's `code` and
- * bind an attacker's Page to the client.
+ * Includes an optional PKCE code_verifier for platforms like Twitter/X,
+ * ensuring the verifier is cryptographically bound to the user session
+ * and returned untampered to the callback without extra session cookies.
  */
-export function signOAuthState(clientId: string, platform: PlatformSlug, sessionId: string): string {
-  const payload: StatePayload = { clientId, platform, sid: sessionId, ts: Date.now() };
+export function signOAuthState(
+  clientId: string,
+  platform: PlatformSlug,
+  sessionId: string,
+  codeVerifier?: string,
+  returnTo?: string,
+): string {
+  const payload: StatePayload = {
+    clientId,
+    platform,
+    sid: sessionId,
+    ts: Date.now(),
+    ...(codeVerifier ? { codeVerifier } : {}),
+    ...(returnTo ? { returnTo } : {}),
+  };
   const json = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return `${json}.${sign(json)}`;
 }

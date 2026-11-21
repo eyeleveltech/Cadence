@@ -4,8 +4,14 @@ import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireClientWorkspaceAccess, requireRole } from "@/lib/session";
-import { storage } from "@/lib/storage";
-import { processImageAsset, readImageMetadata } from "@/lib/media-pipeline";
+import { storage, configureCloudinary } from "@/lib/storage";
+import {
+  isFfmpegAvailable,
+  processImageAsset,
+  processVideoAsset,
+  readImageMetadata,
+} from "@/lib/media-pipeline";
+import { cadenceQueue } from "@/lib/queue";
 import type { AssetKind } from "@prisma/client";
 
 /**
@@ -41,7 +47,9 @@ const MAX_FILE_BYTES = 500 * 1024 * 1024; // 500MB, above Reels' own 300MB cap
  * batch of thirty doesn't fail the other twenty-nine.
  */
 export async function uploadMediaAssets(clientId: string, formData: FormData) {
+  configureCloudinary();
   const user = await requireClientWorkspaceAccess(clientId);
+
   const files = formData.getAll("files").filter((f): f is File => f instanceof File);
 
   if (files.length === 0) {
@@ -120,20 +128,61 @@ export async function uploadMediaAssets(clientId: string, formData: FormData) {
           },
         });
       } else {
-        // Video transcoding (ffmpeg — Reel/Story format conformance) runs
-        // in the worker, not here. The original is usable as-is in the
-        // meantime; platform-ready variants appear once that job exists.
         await prisma.mediaAsset.update({
           where: { id: asset.id },
           data: { originalUrl, status: "READY" },
         });
+
+        // Try enqueuing transcode job to the worker
+        let enqueued = false;
+        try {
+          await cadenceQueue.add(
+            "transcode-video",
+            { assetId: asset.id },
+            { removeOnComplete: 100, removeOnFail: 200 },
+          );
+          enqueued = true;
+        } catch {
+          // Redis may be offline in local standalone development
+        }
+
+        // If not enqueued via queue, run directly if FFmpeg is installed
+        if (!enqueued && (await isFfmpegAvailable())) {
+          try {
+            const variants = await processVideoAsset(clientId, asset.id, buffer);
+            if (variants.length > 0) {
+              await prisma.mediaVariant.createMany({
+                data: variants.map((v) => ({
+                  mediaAssetId: asset.id,
+                  kind: v.kind,
+                  url: v.url,
+                  width: v.width,
+                  height: v.height,
+                  fileSizeBytes: v.fileSizeBytes,
+                })),
+                skipDuplicates: true,
+              });
+            }
+          } catch (transcodeErr) {
+            console.warn(`[upload] Direct video transcoding failed for ${asset.id}:`, transcodeErr);
+          }
+        }
       }
 
       uploaded.push(asset.id);
     } catch (err) {
+      console.error(`[uploadMediaAssets] Failed to process ${file.name}:`, err);
+      const reason =
+        err instanceof Error
+          ? err.message
+          : typeof err === "object" && err !== null && "message" in err
+            ? String((err as { message: unknown }).message)
+            : typeof err === "string"
+              ? err
+              : JSON.stringify(err) || "Upload failed";
       failed.push({
         name: file.name,
-        reason: err instanceof Error ? err.message : "Unknown error",
+        reason,
       });
     }
   }
@@ -191,9 +240,33 @@ export async function deleteMediaAsset(assetId: string, clientId: string) {
 
   const asset = await prisma.mediaAsset.findFirst({
     where: { id, clientId: client },
-    select: { id: true },
+    select: { id: true, originalUrl: true, originalKind: true },
   });
   if (!asset) throw new Error("That asset isn't in this client's library.");
+
+  // Cloudinary deletion if hosted on Cloudinary
+  if (asset.originalUrl && asset.originalUrl.includes("res.cloudinary.com")) {
+    try {
+      configureCloudinary();
+      const parts = asset.originalUrl.split("/");
+      const uploadIdx = parts.findIndex((p) => p === "upload");
+      if (uploadIdx !== -1) {
+        const afterUpload = parts.slice(uploadIdx + 1);
+        const withoutVersion = afterUpload[0]?.startsWith("v") ? afterUpload.slice(1) : afterUpload;
+        const publicIdWithExt = withoutVersion.join("/");
+        const publicId = publicIdWithExt.replace(/\.[^/.]+$/, "");
+        if (publicId) {
+          const { v2: cloudinary } = await import("cloudinary");
+          await cloudinary.uploader.destroy(publicId, {
+            resource_type: asset.originalKind === "VIDEO" ? "video" : "image",
+          });
+          console.log(`[deleteMediaAsset] Destroyed Cloudinary asset: ${publicId}`);
+        }
+      }
+    } catch (cErr) {
+      console.warn(`[deleteMediaAsset] Cloudinary destroy failed:`, cErr);
+    }
+  }
 
   // Detach first: PostAsset and MoodBoardItem both reference the asset
   // without a cascade, so deleting it while it's in use used to fail on a
@@ -221,3 +294,179 @@ export async function deleteMediaAsset(assetId: string, clientId: string) {
 
   revalidatePath(`/clients/${client}/library`);
 }
+
+export type DirectMediaPayload = {
+  url: string;
+  publicId?: string;
+  resourceType: string;
+  originalFilename?: string;
+  mimeType?: string;
+  fileSizeBytes: number;
+  width?: number | null;
+  height?: number | null;
+  durationSecs?: number | null;
+};
+
+/**
+ * Registers an asset directly uploaded from the browser to Cloudinary
+ * into PostgreSQL via Prisma, bypassing server proxying.
+ */
+export async function registerDirectMediaAsset(
+  clientId: string,
+  payload: DirectMediaPayload,
+  options?: {
+    postId?: string;
+    sortOrder?: number;
+  }
+) {
+  const user = await requireClientWorkspaceAccess(clientId);
+
+  // Deduplication check: Check if asset already exists for this client by URL, publicId, or size+filename
+  const existing = await prisma.mediaAsset.findFirst({
+    where: {
+      clientId,
+      OR: [
+        { originalUrl: payload.url },
+        ...(payload.publicId ? [{ originalUrl: { contains: payload.publicId } }] : []),
+        ...(payload.fileSizeBytes && payload.originalFilename
+          ? [
+              {
+                fileSizeBytes: payload.fileSizeBytes,
+                originalUrl: { contains: encodeURIComponent(payload.originalFilename) },
+              },
+            ]
+          : []),
+      ],
+    },
+  });
+
+  if (existing) {
+    console.log(`[registerDirectMediaAsset] Deduplication: reusing existing asset ${existing.id}`);
+    if (options?.postId) {
+      const order =
+        typeof options.sortOrder === "number"
+          ? options.sortOrder
+          : await prisma.postAsset.count({ where: { postId: options.postId } });
+
+      await prisma.postAsset.upsert({
+        where: {
+          postId_mediaAssetId: {
+            postId: options.postId,
+            mediaAssetId: existing.id,
+          },
+        },
+        create: {
+          postId: options.postId,
+          mediaAssetId: existing.id,
+          sortOrder: order,
+        },
+        update: {
+          sortOrder: order,
+        },
+      });
+      revalidatePath(`/posts/${options.postId}`);
+    }
+    return { assetId: existing.id, asset: existing };
+  }
+
+  const isVideo =
+    payload.resourceType === "video" ||
+    payload.mimeType?.startsWith("video/") ||
+    payload.url.endsWith(".mp4") ||
+    payload.url.endsWith(".mov") ||
+    payload.url.endsWith(".webm");
+
+  const kind: AssetKind = isVideo ? "VIDEO" : "IMAGE";
+
+  let mimeType = payload.mimeType;
+  if (!mimeType) {
+    if (isVideo) {
+      mimeType = payload.url.endsWith(".mov") ? "video/quicktime" : "video/mp4";
+    } else {
+      mimeType = payload.url.endsWith(".png") ? "image/png" : "image/jpeg";
+    }
+  }
+
+  const thumbnailUrl = isVideo
+    ? payload.url.replace(/\.[^/.]+$/, ".jpg")
+    : payload.url;
+
+  const asset = await prisma.mediaAsset.create({
+    data: {
+      clientId,
+      uploadedById: user.id,
+      originalKind: kind,
+      originalUrl: payload.url,
+      mimeType,
+      fileSizeBytes: payload.fileSizeBytes || 0,
+      width: payload.width ?? null,
+      height: payload.height ?? null,
+      durationSecs: payload.durationSecs ?? null,
+      status: "READY",
+      tags: [],
+      variants: {
+        create: [
+          {
+            kind: "THUMBNAIL",
+            url: thumbnailUrl,
+            width: payload.width ? Math.min(payload.width, 400) : null,
+            height: payload.height ? Math.min(payload.height, 400) : null,
+            fileSizeBytes: null,
+          },
+        ],
+      },
+    },
+  });
+
+  if (options?.postId) {
+    const post = await prisma.post.findFirst({
+      where: { id: options.postId, clientId },
+      select: { id: true },
+    });
+    if (post) {
+      const order =
+        typeof options.sortOrder === "number"
+          ? options.sortOrder
+          : await prisma.postAsset.count({ where: { postId: post.id } });
+
+      await prisma.postAsset.upsert({
+        where: {
+          postId_mediaAssetId: {
+            postId: post.id,
+            mediaAssetId: asset.id,
+          },
+        },
+        create: {
+          postId: post.id,
+          mediaAssetId: asset.id,
+          sortOrder: order,
+        },
+        update: {
+          sortOrder: order,
+        },
+      });
+      revalidatePath(`/posts/${post.id}`);
+    }
+  }
+
+  revalidatePath(`/clients/${clientId}/library`);
+  revalidatePath(`/clients/${clientId}/plan`);
+
+  return { assetId: asset.id, asset };
+}
+
+/**
+ * Saves a direct-uploaded Cloudinary media asset directly to a post.
+ */
+export async function savePostAsset(
+  postId: string,
+  payload: DirectMediaPayload
+) {
+  const post = await prisma.post.findUnique({
+    where: { id: postId },
+    select: { id: true, clientId: true },
+  });
+  if (!post) throw new Error("Post not found");
+  return await registerDirectMediaAsset(post.clientId, payload, { postId: post.id });
+}
+

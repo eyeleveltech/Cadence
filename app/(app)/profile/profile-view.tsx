@@ -73,8 +73,8 @@ export function ProfileView({ user }: ProfileViewProps) {
       setNewPassword("");
       setConfirmPassword("");
       setTimeout(() => setUpdatedSuccess(false), 5000);
-    } catch (err: any) {
-      toast.error(err.message ?? "Could not update password. Check your current password.");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Could not update password. Check your current password.");
     } finally {
       setUpdating(false);
     }
@@ -87,8 +87,8 @@ export function ProfileView({ user }: ProfileViewProps) {
       setResetSent(true);
       toast.success(`Password reset link sent to ${user.email}!`);
       setTimeout(() => setResetSent(false), 60000);
-    } catch (err: any) {
-      toast.error(err.message ?? "Could not send reset link.");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Could not send reset link.");
     } finally {
       setSendingReset(false);
     }

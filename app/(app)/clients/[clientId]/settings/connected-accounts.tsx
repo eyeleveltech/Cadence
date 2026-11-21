@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Platform as PrismaPlatform, ConnectionStatus, TokenType } from "@prisma/client";
 
@@ -80,17 +81,33 @@ export function ConnectedAccounts({
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    const success = searchParams.get("oauth_success");
-    const error = searchParams.get("oauth_error");
-    const platform = searchParams.get("platform");
-    if (!success && !error) return;
+    const connected = searchParams.get("connected") || (searchParams.get("oauth_success") ? searchParams.get("platform") : null);
+    const error = searchParams.get("error") || searchParams.get("oauth_error");
+    const platform = searchParams.get("platform") || searchParams.get("connected");
+    if (!connected && !error) return;
 
-    if (success) toast.success(`${platform} connected`);
-    else if (error === "not_configured") toast.error(`${platform} isn't configured yet — add its API credentials to .env first.`);
-    else if (error === "denied") toast.error(`${platform} connection was cancelled.`);
-    else if (error === "no_accounts") toast.error(`That login doesn't administer any ${platform} account we can publish to.`);
-    else if (error === "expired") toast.error("That connection attempt timed out — try connecting again.");
-    else toast.error(`Couldn't connect ${platform} — see server logs.`);
+    if (connected) {
+      if (connected.includes(",")) {
+        const names = connected
+          .split(",")
+          .map((c) => PLATFORM_LABEL[c.trim().toUpperCase() as Platform] || c.trim())
+          .join(" & ");
+        toast.success(`${names} connected successfully!`);
+      } else {
+        const name = PLATFORM_LABEL[connected.toUpperCase() as Platform] || connected;
+        toast.success(`${name} connected successfully!`);
+      }
+    } else if (error === "not_configured") {
+      toast.error(`${platform} isn't configured yet — add its API credentials to .env first.`);
+    } else if (error === "denied") {
+      toast.error(`${platform} connection was cancelled.`);
+    } else if (error === "no_accounts") {
+      toast.error(`That login doesn't administer any ${platform} account we can publish to.`);
+    } else if (error === "expired") {
+      toast.error("That connection attempt timed out — try connecting again.");
+    } else {
+      toast.error(`Couldn't connect ${platform} — see server logs.`);
+    }
 
     router.replace(`/clients/${clientId}/settings`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,7 +121,39 @@ export function ConnectedAccounts({
 
         return (
           <div key={platform} className="flex items-center justify-between rounded-xl border border-border p-3.5">
-            <span className="text-sm font-medium">{PLATFORM_LABEL[platform]}</span>
+            <div className="flex items-center gap-3">
+              {account?.avatarUrl ? (
+                <Image
+                  src={account.avatarUrl}
+                  alt={account.accountName}
+                  width={32}
+                  height={32}
+                  unoptimized
+                  className="size-8 rounded-full object-cover border border-border"
+                />
+              ) : (
+                <div className="size-8 rounded-full bg-secondary/60 flex items-center justify-center text-xs font-semibold text-foreground/80">
+                  {PLATFORM_LABEL[platform].charAt(0)}
+                </div>
+              )}
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold">{PLATFORM_LABEL[platform]}</span>
+                  {account && (
+                    <span className="text-xs font-medium text-foreground/90">
+                      {account.accountName}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-[var(--ink3)]">
+                  {account
+                    ? (account.tokenType === "PAGE"
+                        ? "Connected · Permanent Page Token"
+                        : "Connected · User Account")
+                    : "Not connected to this client"}
+                </p>
+              </div>
+            </div>
 
             <div className="flex items-center gap-2">
               <span
@@ -119,13 +168,34 @@ export function ConnectedAccounts({
               </span>
 
               {account ? (
-                <ManageDialog
-                  clientId={clientId}
-                  account={account}
-                  label={PLATFORM_LABEL[platform]}
-                  isLeadership={isLeadership}
-                  onChanged={() => router.refresh()}
-                />
+                <div className="flex items-center gap-1.5">
+                  <ManageDialog
+                    clientId={clientId}
+                    account={account}
+                    label={PLATFORM_LABEL[platform]}
+                    isLeadership={isLeadership}
+                    onChanged={() => router.refresh()}
+                  />
+                  {isLeadership && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      onClick={async () => {
+                        if (!window.confirm(`Disconnect ${PLATFORM_LABEL[platform]} (${account.accountName})?`)) return;
+                        try {
+                          await disconnectSocialAccount({ clientId, accountId: account.id });
+                          toast.success(`${PLATFORM_LABEL[platform]} disconnected`);
+                          router.refresh();
+                        } catch (err) {
+                          toast.error(err instanceof Error ? err.message : "Couldn't disconnect");
+                        }
+                      }}
+                    >
+                      Disconnect
+                    </Button>
+                  )}
+                </div>
               ) : (
                 <ConnectControl
                   clientId={clientId}
@@ -200,6 +270,45 @@ function ConnectControl({
     );
   }
 
+  if (available.length === 1) {
+    const route = available[0];
+    return (
+      <div className="flex items-center gap-1">
+        <Button
+          size="sm"
+          variant="outline"
+          nativeButton={false}
+          render={
+            <a
+              href={`/api/oauth/${route.slug}/connect?clientId=${clientId}`}
+            />
+          }
+        >
+          Connect
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button size="sm" variant="ghost" className="px-1.5 text-muted-foreground">
+                <ChevronDown className="size-3.5" />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuItem
+              onClick={handleConnectSandbox}
+              disabled={connectingSandbox}
+              className="flex w-full flex-col items-start gap-0.5"
+            >
+              <span className="text-xs font-medium text-muted-foreground">🧪 Connect Sandbox Account</span>
+              <span className="text-[10px] text-[var(--ink3)]">Simulate locally without live OAuth</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    );
+  }
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -213,8 +322,6 @@ function ConnectControl({
             render={
               <a
                 href={`/api/oauth/${route.slug}/connect?clientId=${clientId}`}
-                target="_blank"
-                rel="noopener noreferrer"
               />
             }
             className="flex w-full flex-col items-start gap-0.5"

@@ -167,11 +167,12 @@ model SocialAccount {
   client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
   scheduledJobs  ScheduledJob[]
 
-  @@unique([clientId, platform, externalAccountId])
+  @@unique([clientId, platform])
   // A Page or channel belongs to exactly one client workspace. Without
   // this, the same Instagram account could be attached to two clients
   // and both their plans would publish to it.
   @@unique([platform, externalAccountId])
+  @@index([clientId, platform])
   @@index([connectionStatus])
 }
 
@@ -290,6 +291,7 @@ model Post {
   status         PostStatus @default(IDEA)
   platforms      Platform[]
   caption        String?
+  firstComment   String?
   hashtags       String[]
   collaborators  String[] // up to 3 Instagram usernames — enforced in app logic
   postAsStory    Boolean    @default(false)
@@ -462,23 +464,23 @@ enum CommType {
 // ───────────────────────── Publishing Engine ─────────────────────────
 
 model ScheduledJob {
-  id              String    @id @default(cuid())
+  id              String         @id @default(cuid())
   postId          String
-  socialAccountId String
+  socialAccountId String?
   platform        Platform
-  idempotencyKey  String    @unique
+  idempotencyKey  String         @unique
   bullmqJobId     String?
-  status          JobStatus @default(QUEUED)
-  attempts        Int       @default(0)
+  status          JobStatus      @default(QUEUED)
+  attempts        Int            @default(0)
   platformPostId  String? // set once published; checked before any retry to prevent double-posting
   errorLog        String?
-  scheduledFor    DateTime  @db.Timestamptz(3)
-  publishedAt     DateTime? @db.Timestamptz(3)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  scheduledFor    DateTime       @db.Timestamptz(3)
+  publishedAt     DateTime?      @db.Timestamptz(3)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
-  post          Post          @relation(fields: [postId], references: [id], onDelete: Cascade)
-  socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id])
+  post          Post           @relation(fields: [postId], references: [id], onDelete: Cascade)
+  socialAccount SocialAccount? @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
 
   @@index([status, scheduledFor])
 }

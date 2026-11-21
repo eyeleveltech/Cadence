@@ -1,4 +1,4 @@
-import "server-only";
+// Shared with the standalone worker process — no "server-only" guard.
 import type { Platform as PrismaPlatform, TokenType } from "@prisma/client";
 
 type Platform = PrismaPlatform | "TWITTER";
@@ -58,12 +58,14 @@ export type DiscoveredAccount = {
   tokenType: TokenType;
   /** Only meaningful for USER tokens; PAGE and SYSTEM_USER don't expire. */
   expiresAt?: Date;
+  linkedInstagram?: { id: string; username: string; profile_picture_url?: string };
+  linkedFacebookPage?: { id: string; name: string; avatarUrl?: string; access_token: string };
 };
 
 export interface PlatformOAuthAdapter {
   isConfigured(): boolean;
-  authorizeUrl(redirectUri: string, state: string): string;
-  exchangeCode(code: string, redirectUri: string): Promise<ExchangedToken>;
+  authorizeUrl(redirectUri: string, state: string, options?: { codeChallenge?: string; scopes?: string[] }): string;
+  exchangeCode(code: string, redirectUri: string, options?: { codeVerifier?: string }): Promise<ExchangedToken>;
   /**
    * Every asset this token can publish to — not just the first one.
    *
@@ -83,7 +85,7 @@ export interface PlatformOAuthAdapter {
   refreshAccessToken?(currentToken: string): Promise<ExchangedToken | null>;
 }
 
-const GRAPH_VERSION = process.env.META_GRAPH_API_VERSION ?? "v26.0";
+const GRAPH_VERSION = process.env.META_GRAPH_API_VERSION ?? "v22.0";
 
 /**
  * Meta — one app, one flow, covers both Facebook Pages and their linked
@@ -95,21 +97,37 @@ const GRAPH_VERSION = process.env.META_GRAPH_API_VERSION ?? "v26.0";
 const meta: PlatformOAuthAdapter = {
   isConfigured: () => Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET),
 
-  authorizeUrl(redirectUri, state) {
+  authorizeUrl(redirectUri, state, options) {
+    const defaultScopes = [
+      "public_profile",
+      "pages_show_list",
+      "pages_read_engagement",
+      "pages_manage_posts",
+      "instagram_basic",
+      "instagram_content_publish",
+      "business_management",
+    ];
+    const scopes = options?.scopes && options.scopes.length > 0
+      ? options.scopes
+      : process.env.FACEBOOK_OAUTH_SCOPES
+        ? process.env.FACEBOOK_OAUTH_SCOPES.split(",").map((s) => s.trim()).filter(Boolean)
+        : process.env.META_OAUTH_SCOPES
+          ? process.env.META_OAUTH_SCOPES.split(",").map((s) => s.trim()).filter(Boolean)
+          : defaultScopes;
+
     const params = new URLSearchParams({
       client_id: process.env.META_APP_ID!,
       redirect_uri: redirectUri,
       state,
       response_type: "code",
-      scope: [
-        "pages_show_list", "pages_read_engagement", "pages_manage_posts",
-        "instagram_basic", "instagram_content_publish", "business_management",
-      ].join(","),
+      auth_type: "rerequest",
+      scope: scopes.join(","),
     });
     return `https://www.facebook.com/${GRAPH_VERSION}/dialog/oauth?${params}`;
   },
 
   async exchangeCode(code, redirectUri) {
+    console.log(`[meta:exchangeCode] Exchanging short-lived code (${code.slice(0, 10)}...) with redirectUri: ${redirectUri}`);
     const shortLived = new URLSearchParams({
       client_id: process.env.META_APP_ID!,
       client_secret: process.env.META_APP_SECRET!,
@@ -117,10 +135,16 @@ const meta: PlatformOAuthAdapter = {
       code,
     });
     const shortRes = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/oauth/access_token?${shortLived}`);
-    if (!shortRes.ok) throw new Error(`Meta token exchange failed: ${await shortRes.text()}`);
-    const short = (await shortRes.json()) as { access_token: string };
+    if (!shortRes.ok) {
+      const errText = await shortRes.text();
+      console.error(`[meta:exchangeCode] Short-lived token exchange failed (${shortRes.status}):`, errText);
+      throw new Error(`Meta token exchange failed: ${errText}`);
+    }
+    const short = (await shortRes.json()) as { access_token: string; expires_in?: number };
+    console.log(`[meta:exchangeCode] Successfully received short-lived token: ${short.access_token.slice(0, 12)}... (expires_in: ${short.expires_in ?? "N/A"})`);
 
     // Short-lived user token -> 60-day long-lived token, standard Meta hop.
+    console.log(`[meta:exchangeCode] Exchanging short-lived token for 60-day long-lived token (grant_type=fb_exchange_token)...`);
     const exchange = new URLSearchParams({
       grant_type: "fb_exchange_token",
       client_id: process.env.META_APP_ID!,
@@ -128,8 +152,13 @@ const meta: PlatformOAuthAdapter = {
       fb_exchange_token: short.access_token,
     });
     const longRes = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/oauth/access_token?${exchange}`);
-    if (!longRes.ok) throw new Error(`Meta long-lived token exchange failed: ${await longRes.text()}`);
+    if (!longRes.ok) {
+      const errText = await longRes.text();
+      console.error(`[meta:exchangeCode] Long-lived token exchange failed (${longRes.status}):`, errText);
+      throw new Error(`Meta long-lived token exchange failed: ${errText}`);
+    }
     const long = (await longRes.json()) as { access_token: string; expires_in?: number };
+    console.log(`[meta:exchangeCode] Successfully received 60-day long-lived token: ${long.access_token.slice(0, 12)}... (expires_in: ${long.expires_in ?? "N/A"})`);
 
     return {
       accessToken: long.access_token,
@@ -140,7 +169,8 @@ const meta: PlatformOAuthAdapter = {
   async listAccounts(token) {
     const pages = await fetchPages(token.accessToken);
     if (pages.length === 0) {
-      throw new Error("No Facebook Page found for this account — connect a Page first.");
+      console.warn("[meta:listAccounts] No Facebook Pages found under this user account.");
+      return [];
     }
 
     return pages.map((page) => ({
@@ -151,6 +181,13 @@ const meta: PlatformOAuthAdapter = {
       // The Page's own token, not the user token we authorized with.
       accessToken: page.access_token,
       tokenType: "PAGE" as TokenType,
+      linkedInstagram: page.instagram_business_account
+        ? {
+            id: page.instagram_business_account.id,
+            username: page.instagram_business_account.username,
+            profile_picture_url: page.instagram_business_account.profile_picture_url,
+          }
+        : undefined,
     }));
   },
 };
@@ -160,59 +197,291 @@ type MetaPage = {
   name: string;
   access_token: string;
   picture?: { data?: { url?: string } };
-  instagram_business_account?: { id: string; username: string; profile_picture_url?: string };
+  instagram_business_account?: { id: string; username: string; name?: string; profile_picture_url?: string };
 };
 
 /** One call gets the Pages, their per-Page tokens, and the Instagram
  * account linked to each — which is the only clean way to tie a client's
- * Instagram to their Facebook Page. */
+ * Instagram to their Facebook Page. Checks /me/businesses if /me/accounts is empty. */
 async function fetchPages(userAccessToken: string): Promise<MetaPage[]> {
-  const fields = "id,name,access_token,picture{url},instagram_business_account{id,username,profile_picture_url}";
-  const res = await fetch(
-    `https://graph.facebook.com/${GRAPH_VERSION}/me/accounts?fields=${encodeURIComponent(fields)}&access_token=${userAccessToken}`,
-  );
-  if (!res.ok) throw new Error(`Couldn't list Facebook Pages: ${await res.text()}`);
-  const data = (await res.json()) as { data?: MetaPage[] };
-  return data.data ?? [];
+  const pageFields = "id,name,access_token,category,tasks";
+  console.log(`[meta:fetchPages] Requesting /me/accounts via Graph API ${GRAPH_VERSION}...`);
+  let pages: MetaPage[] = [];
+
+  try {
+    const res = await fetch(
+      `https://graph.facebook.com/${GRAPH_VERSION}/me/accounts?fields=${pageFields}&limit=100&access_token=${userAccessToken}`,
+    );
+    if (res.ok) {
+      const data = (await res.json()) as { data?: MetaPage[] };
+      pages = data.data ?? [];
+      console.log(`[meta:fetchPages] /me/accounts returned ${pages.length} page(s):`, pages.map((p) => ({ id: p.id, name: p.name })));
+    } else {
+      const errText = await res.text();
+      console.warn(`[meta:fetchPages] /me/accounts failed (${res.status}):`, errText);
+    }
+  } catch (err) {
+    console.warn("[meta:fetchPages] /me/accounts network error:", err);
+  }
+
+  // Fallback 1: Query /me?fields=accounts{...}
+  if (pages.length === 0) {
+    console.log(`[meta:fetchPages] /me/accounts returned 0 pages. Trying /me?fields=accounts fallback...`);
+    try {
+      const meRes = await fetch(
+        `https://graph.facebook.com/${GRAPH_VERSION}/me?fields=id,name,accounts{id,name,access_token,category,tasks}&access_token=${userAccessToken}`,
+      );
+      if (meRes.ok) {
+        const meData = (await meRes.json()) as { accounts?: { data?: MetaPage[] } };
+        if (meData.accounts?.data && meData.accounts.data.length > 0) {
+          pages = meData.accounts.data;
+          console.log(`[meta:fetchPages] /me?fields=accounts returned ${pages.length} page(s).`);
+        }
+      }
+    } catch (meErr) {
+      console.warn("[meta:fetchPages] /me?fields=accounts fallback error:", meErr);
+    }
+  }
+
+  // Fallback 2: Check Meta Business Portfolios (/me/businesses)
+  if (pages.length === 0) {
+    console.log(`[meta:fetchPages] Still 0 pages. Checking Meta Business Portfolios (/me/businesses)...`);
+    try {
+      const bizRes = await fetch(
+        `https://graph.facebook.com/${GRAPH_VERSION}/me/businesses?fields=id,name,client_pages{id,name,access_token},owned_pages{id,name,access_token}&access_token=${userAccessToken}`,
+      );
+      if (bizRes.ok) {
+        const bizData = (await bizRes.json()) as {
+          data?: Array<{
+            id: string;
+            name?: string;
+            owned_pages?: { data?: MetaPage[] };
+            client_pages?: { data?: MetaPage[] };
+          }>;
+        };
+        const businesses = bizData.data ?? [];
+        console.log(`[meta:fetchPages] /me/businesses returned ${businesses.length} portfolio(s):`, businesses.map((b) => ({ id: b.id, name: b.name })));
+        for (const biz of businesses) {
+          if (biz.owned_pages?.data && biz.owned_pages.data.length > 0) {
+            console.log(`[meta:fetchPages] Found ${biz.owned_pages.data.length} owned_page(s) in business ${biz.id}`);
+            pages = [...pages, ...biz.owned_pages.data];
+          }
+          if (biz.client_pages?.data && biz.client_pages.data.length > 0) {
+            console.log(`[meta:fetchPages] Found ${biz.client_pages.data.length} client_page(s) in business ${biz.id}`);
+            pages = [...pages, ...biz.client_pages.data];
+          }
+
+          // Fallback sub-requests if nested objects were omitted
+          if (!biz.owned_pages?.data && !biz.client_pages?.data) {
+            try {
+              const ownedRes = await fetch(
+                `https://graph.facebook.com/${GRAPH_VERSION}/${biz.id}/owned_pages?fields=${encodeURIComponent(pageFields)}&access_token=${userAccessToken}`,
+              );
+              if (ownedRes.ok) {
+                const op = (await ownedRes.json()) as { data?: MetaPage[] };
+                if (op.data && op.data.length > 0) {
+                  console.log(`[meta:fetchPages] Fetched ${op.data.length} owned_page(s) via /${biz.id}/owned_pages`);
+                  pages = [...pages, ...op.data];
+                }
+              }
+              const clientRes = await fetch(
+                `https://graph.facebook.com/${GRAPH_VERSION}/${biz.id}/client_pages?fields=${encodeURIComponent(pageFields)}&access_token=${userAccessToken}`,
+              );
+              if (clientRes.ok) {
+                const cp = (await clientRes.json()) as { data?: MetaPage[] };
+                if (cp.data && cp.data.length > 0) {
+                  console.log(`[meta:fetchPages] Fetched ${cp.data.length} client_page(s) via /${biz.id}/client_pages`);
+                  pages = [...pages, ...cp.data];
+                }
+              }
+            } catch (innerErr) {
+              console.warn(`[meta:fetchPages] Error querying pages for business ${biz.id}:`, innerErr);
+            }
+          }
+        }
+      } else {
+        const bizErr = await bizRes.text();
+        console.warn(`[meta:fetchPages] /me/businesses failed (${bizRes.status}):`, bizErr);
+      }
+    } catch (err) {
+      console.warn("[meta:fetchPages] Failed to fetch /me/businesses:", err);
+    }
+  }
+
+  // Deduplicate pages by page ID
+  const seen = new Set<string>();
+  const uniquePages = pages.filter((p) => {
+    if (seen.has(p.id)) return false;
+    seen.add(p.id);
+    return true;
+  });
+
+  // Ensure every discovered Page has its Page Access Token resolved
+  for (const page of uniquePages) {
+    if (!page.access_token) {
+      try {
+        console.log(`[meta:fetchPages] Page ${page.id} (${page.name}) missing access_token. Fetching via /${page.id}...`);
+        const pageRes = await fetch(
+          `https://graph.facebook.com/${GRAPH_VERSION}/${page.id}?fields=access_token&access_token=${userAccessToken}`,
+        );
+        if (pageRes.ok) {
+          const pageData = (await pageRes.json()) as { access_token?: string };
+          if (pageData.access_token) {
+            page.access_token = pageData.access_token;
+            console.log(`[meta:fetchPages] Successfully fetched Page Access Token for ${page.id}`);
+          }
+        }
+      } catch (tokenErr) {
+        console.warn(`[meta:fetchPages] Failed to fetch Page Access Token for ${page.id}:`, tokenErr);
+      }
+    }
+  }
+
+  console.log(`[meta:fetchPages] Total unique Facebook Pages discovered: ${uniquePages.length}`);
+  return uniquePages;
 }
 
 /**
- * Instagram publishing is reached through the same Meta app/token as
- * Facebook, but the account identity is the Page's linked Instagram
- * professional account, not the Page itself.
+ * Instagram Unified Login adapter — uses Meta dialog with channel: 'IG_API_ONBOARDING'
+ * and queries assigned_instagram_accounts directly, freeing Instagram from requiring a Facebook Page.
  */
 const instagram: PlatformOAuthAdapter = {
-  ...meta,
+  isConfigured: () => Boolean((process.env.INSTAGRAM_APP_ID || process.env.META_APP_ID) && (process.env.INSTAGRAM_APP_SECRET || process.env.META_APP_SECRET)),
+
+  authorizeUrl(redirectUri, state, options) {
+    const appId = process.env.INSTAGRAM_APP_ID || process.env.META_APP_ID!;
+    const scopes = options?.scopes && options.scopes.length > 0
+      ? options.scopes
+      : [
+          "instagram_basic",
+          "instagram_content_publish",
+          "business_management",
+        ];
+
+    const params = new URLSearchParams({
+      client_id: appId,
+      redirect_uri: redirectUri,
+      state,
+      response_type: "code",
+      scope: scopes.join(","),
+      extras: JSON.stringify({ setup: { channel: "IG_API_ONBOARDING" } }),
+    });
+    return `https://www.facebook.com/v22.0/dialog/oauth?${params}`;
+  },
+
+  async exchangeCode(code, redirectUri) {
+    const appId = process.env.INSTAGRAM_APP_ID || process.env.META_APP_ID!;
+    const appSecret = process.env.INSTAGRAM_APP_SECRET || process.env.META_APP_SECRET!;
+    const shortLived = new URLSearchParams({
+      client_id: appId,
+      client_secret: appSecret,
+      redirect_uri: redirectUri,
+      code,
+    });
+    const shortRes = await fetch(`https://graph.facebook.com/v22.0/oauth/access_token?${shortLived}`);
+    if (!shortRes.ok) throw new Error(`Instagram token exchange failed: ${await shortRes.text()}`);
+    const short = (await shortRes.json()) as { access_token: string; expires_in?: number };
+
+    // Exchange for 60-day token
+    let accessToken = short.access_token;
+    let expiresAt = short.expires_in ? new Date(Date.now() + short.expires_in * 1000) : undefined;
+    try {
+      const exchange = new URLSearchParams({
+        grant_type: "fb_exchange_token",
+        client_id: appId,
+        client_secret: appSecret,
+        fb_exchange_token: short.access_token,
+      });
+      const longRes = await fetch(`https://graph.facebook.com/v22.0/oauth/access_token?${exchange}`);
+      if (longRes.ok) {
+        const long = (await longRes.json()) as { access_token: string; expires_in?: number };
+        accessToken = long.access_token;
+        if (long.expires_in) {
+          expiresAt = new Date(Date.now() + long.expires_in * 1000);
+        }
+      }
+    } catch {}
+
+    return {
+      accessToken,
+      expiresAt,
+    };
+  },
+
   async listAccounts(token) {
-    const pages = await fetchPages(token.accessToken);
-    if (pages.length === 0) {
-      throw new Error("No Facebook Page found — Instagram publishing connects through a linked Page.");
-    }
-
-    // Publishing to Instagram is authorized by the *Page's* token, so
-    // each IG account is carried by the Page it's linked to.
-    const linked = pages.filter((page) => page.instagram_business_account);
-    if (linked.length === 0) {
-      throw new Error(
-        "No Instagram professional account is linked to any of these Pages. Link one in Meta Business settings first.",
+    // 1. Unified login: query assigned_instagram_accounts directly
+    try {
+      const assignedRes = await fetch(
+        `https://graph.facebook.com/v22.0/me/assigned_instagram_accounts?fields=id,username,name,profile_picture_url&access_token=${token.accessToken}`,
       );
+      if (assignedRes.ok) {
+        const assignedData = (await assignedRes.json()) as {
+          data?: Array<{ id: string; username?: string; name?: string; profile_picture_url?: string }>;
+        };
+        if (assignedData.data && assignedData.data.length > 0) {
+          return assignedData.data.map((acc) => ({
+            externalAccountId: acc.id,
+            accountName: `@${(acc.username || acc.name || "instagram").replace(/^@+/, "")}`,
+            avatarUrl: acc.profile_picture_url,
+            scopes: ["instagram_basic", "instagram_content_publish", "business_management"],
+            accessToken: token.accessToken,
+            tokenType: "USER" as TokenType,
+            expiresAt: token.expiresAt,
+          }));
+        }
+      }
+    } catch (err) {
+      console.warn("[instagram:listAccounts] Error checking assigned_instagram_accounts:", err);
     }
 
+    // 2. Query /me fallback
+    try {
+      const meRes = await fetch(
+        `https://graph.facebook.com/v22.0/me?fields=id,username,name,profile_picture_url&access_token=${token.accessToken}`,
+      );
+      if (meRes.ok) {
+        const me = (await meRes.json()) as { id: string; username?: string; name?: string; profile_picture_url?: string };
+        if (me.id) {
+          return [{
+            externalAccountId: me.id,
+            accountName: `@${(me.username || me.name || "instagram").replace(/^@+/, "")}`,
+            avatarUrl: me.profile_picture_url,
+            scopes: ["instagram_basic", "instagram_content_publish", "business_management"],
+            accessToken: token.accessToken,
+            tokenType: "USER" as TokenType,
+            expiresAt: token.expiresAt,
+          }];
+        }
+      }
+    } catch (err) {
+      console.warn("[instagram:listAccounts] Error checking /me:", err);
+    }
+
+    // 3. Fallback: check linked pages if present
+    const pages = await fetchPages(token.accessToken);
+    const linked = pages.filter((page) => page.instagram_business_account);
     return linked.map((page) => ({
       externalAccountId: page.instagram_business_account!.id,
-      accountName: `@${page.instagram_business_account!.username}`,
+      accountName: `@${page.instagram_business_account!.username.replace(/^@+/, "")}`,
       avatarUrl: page.instagram_business_account!.profile_picture_url,
       scopes: ["instagram_content_publish", "instagram_basic"],
       accessToken: page.access_token,
       tokenType: "PAGE" as TokenType,
+      linkedFacebookPage: {
+        id: page.id,
+        name: page.name,
+        avatarUrl: page.picture?.data?.url,
+        access_token: page.access_token,
+      },
     }));
   },
 };
 
 /**
- * LinkedIn — organization posting via the Community Management API.
- * The scopes below are exactly what's gated behind LinkedIn's partner
- * vetting; the calls are correct today but will 403 until that clears.
+ * LinkedIn — personal profile and organization OAuth.
+ * Personal profile posting uses OpenID Connect with w_member_social.
+ * (Placeholder reserved for LINKEDIN_COMPANY_CLIENT_ID / LINKEDIN_COMPANY_CLIENT_SECRET
+ * for organization pages once partner vetting clears).
  */
 const linkedin: PlatformOAuthAdapter = {
   isConfigured: () => Boolean(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET),
@@ -223,7 +492,7 @@ const linkedin: PlatformOAuthAdapter = {
       client_id: process.env.LINKEDIN_CLIENT_ID!,
       redirect_uri: redirectUri,
       state,
-      scope: "w_organization_social r_organization_social rw_organization_admin",
+      scope: "openid profile email w_member_social",
     });
     return `https://www.linkedin.com/oauth/v2/authorization?${params}`;
   },
@@ -251,37 +520,46 @@ const linkedin: PlatformOAuthAdapter = {
   },
 
   async listAccounts(token) {
-    const res = await fetch(
-      "https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR",
-      { headers: { Authorization: `Bearer ${token.accessToken}` } },
-    );
-    if (!res.ok) throw new Error(`Couldn't list LinkedIn organizations you administer: ${await res.text()}`);
-    const data = (await res.json()) as { elements?: { organizationalTarget: string }[] };
-    const elements = data.elements ?? [];
-    if (elements.length === 0) throw new Error("No LinkedIn organization page found under this account.");
+    // ── Placeholder for LinkedIn Company Pages (w_organization_social) ──
+    // When approved, LINKEDIN_COMPANY_CLIENT_ID / LINKEDIN_COMPANY_CLIENT_SECRET
+    // will query /v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR.
 
-    // LinkedIn has no per-organization credential — every call uses the
-    // member token, so each entry carries the same one.
-    return Promise.all(
-      elements.map(async (element) => {
-        const orgId = element.organizationalTarget.split(":").pop()!;
-        const orgRes = await fetch(`https://api.linkedin.com/v2/organizations/${orgId}`, {
-          headers: { Authorization: `Bearer ${token.accessToken}` },
-        });
-        const name = orgRes.ok
-          ? ((await orgRes.json()) as { localizedName?: string }).localizedName ?? `Organization ${orgId}`
-          : `Organization ${orgId}`;
+    // ── Personal Member Profile (w_member_social) via OpenID Connect ──
+    const res = await fetch("https://api.linkedin.com/v2/userinfo", {
+      headers: { Authorization: `Bearer ${token.accessToken}` },
+    });
+    if (!res.ok) {
+      throw new Error(`LinkedIn userinfo lookup failed: ${await res.text()}`);
+    }
+    const info = (await res.json()) as {
+      sub: string;
+      name?: string;
+      given_name?: string;
+      family_name?: string;
+      picture?: string;
+      email?: string;
+    };
 
-        return {
-          externalAccountId: orgId,
-          accountName: name,
-          scopes: ["w_organization_social", "r_organization_social"],
-          accessToken: token.accessToken,
-          tokenType: "USER" as TokenType,
-          expiresAt: token.expiresAt,
-        };
-      }),
-    );
+    if (!info.sub) {
+      throw new Error("LinkedIn userinfo did not return a member ID (sub).");
+    }
+
+    const displayName =
+      info.name ||
+      [info.given_name, info.family_name].filter(Boolean).join(" ") ||
+      `LinkedIn Member (${info.sub})`;
+
+    return [
+      {
+        externalAccountId: info.sub,
+        accountName: displayName,
+        avatarUrl: info.picture,
+        scopes: ["openid", "profile", "email", "w_member_social"],
+        accessToken: token.accessToken,
+        tokenType: "USER" as TokenType,
+        expiresAt: token.expiresAt,
+      },
+    ];
   },
 };
 
@@ -461,29 +739,40 @@ const instagramDirect: PlatformOAuthAdapter = {
 
 const twitterOAuth: PlatformOAuthAdapter = {
   isConfigured() {
-    return Boolean(process.env.TWITTER_CLIENT_ID);
+    return Boolean(
+      (process.env.TWITTER_CLIENT_ID || process.env.X_CLIENT_ID) &&
+      (process.env.TWITTER_CLIENT_SECRET || process.env.X_CLIENT_SECRET)
+    );
   },
 
-  authorizeUrl(redirectUri: string, state: string): string {
-    const clientId = process.env.TWITTER_CLIENT_ID;
-    if (!clientId) {
-      throw new Error("TWITTER_CLIENT_ID is not configured in .env");
+  authorizeUrl(redirectUri: string, state: string, options?: { codeChallenge?: string; scopes?: string[] }): string {
+    const clientId = process.env.TWITTER_CLIENT_ID || process.env.X_CLIENT_ID || "QVN1YkNqRjBtVXU5V3BDTGlNTX2k6MTpjaQ";
+    const codeChallenge = options?.codeChallenge;
+    if (!codeChallenge) {
+      throw new Error("RFC 7636 S256 code_challenge is required for Twitter OAuth authorization");
     }
+    const scopes = options?.scopes?.length
+      ? options.scopes.join(" ")
+      : "tweet.read tweet.write users.read offline.access";
     const params = new URLSearchParams({
       response_type: "code",
       client_id: clientId,
       redirect_uri: redirectUri,
-      scope: "tweet.read tweet.write users.read offline.access",
+      scope: scopes,
       state,
-      code_challenge: "challenge",
-      code_challenge_method: "plain",
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
     });
     return `https://twitter.com/i/oauth2/authorize?${params.toString()}`;
   },
 
-  async exchangeCode(code: string, redirectUri: string): Promise<ExchangedToken> {
-    const clientId = process.env.TWITTER_CLIENT_ID ?? "";
-    const clientSecret = process.env.TWITTER_CLIENT_SECRET ?? "";
+  async exchangeCode(code: string, redirectUri: string, options?: { codeVerifier?: string }): Promise<ExchangedToken> {
+    const clientId = process.env.TWITTER_CLIENT_ID || process.env.X_CLIENT_ID || "";
+    const clientSecret = process.env.TWITTER_CLIENT_SECRET || process.env.X_CLIENT_SECRET || "";
+    const codeVerifier = options?.codeVerifier;
+    if (!codeVerifier) {
+      throw new Error("RFC 7636 code_verifier is required for Twitter token exchange");
+    }
     const res = await fetch("https://api.twitter.com/2/oauth2/token", {
       method: "POST",
       headers: {
@@ -494,7 +783,7 @@ const twitterOAuth: PlatformOAuthAdapter = {
         code,
         grant_type: "authorization_code",
         redirect_uri: redirectUri,
-        code_verifier: "challenge",
+        code_verifier: codeVerifier,
       }),
     });
     if (!res.ok) {
@@ -517,7 +806,7 @@ const twitterOAuth: PlatformOAuthAdapter = {
         externalAccountId: "twitter_me",
         accountName: "X (Twitter) Account",
         avatarUrl: undefined,
-        scopes: [],
+        scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"],
         tokenType: "USER",
         accessToken: token.accessToken,
         expiresAt: token.expiresAt,
@@ -528,7 +817,7 @@ const twitterOAuth: PlatformOAuthAdapter = {
       externalAccountId: data.id,
       accountName: `@${data.username}`,
       avatarUrl: data.profile_image_url ?? undefined,
-      scopes: [],
+      scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"],
       tokenType: "USER",
       accessToken: token.accessToken,
       expiresAt: token.expiresAt,

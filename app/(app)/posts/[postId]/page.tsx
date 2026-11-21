@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { getPost } from "@/lib/actions/posts";
 import { listMediaAssets } from "@/lib/actions/media";
 import { requireUser } from "@/lib/session";
@@ -12,7 +14,7 @@ export default async function PostPage({
 }) {
   const { postId } = await params;
   const post = await getPost(postId);
-  const [libraryAssets, currentUser, designers, writers, campaigns] = await Promise.all([
+  const [libraryAssets, currentUser, designers, writers, campaigns, socialAccounts] = await Promise.all([
     listMediaAssets(post.clientId),
     requireUser(),
     // Scoped to people on this client, not everyone in the org: the
@@ -22,6 +24,17 @@ export default async function PostPage({
     listAssignable(post.clientId, "DESIGNER"),
     listAssignable(post.clientId, "WRITER"),
     listCampaigns(post.clientId),
+    prisma.socialAccount.findMany({
+      where: { clientId: post.clientId },
+      select: {
+        id: true,
+        platform: true,
+        accountName: true,
+        avatarUrl: true,
+        connectionStatus: true,
+        tokenExpiresAt: true,
+      },
+    }),
   ]);
 
   return (
@@ -32,6 +45,7 @@ export default async function PostPage({
       designers={designers}
       writers={writers}
       campaigns={campaigns}
+      socialAccounts={socialAccounts}
     />
   );
 }

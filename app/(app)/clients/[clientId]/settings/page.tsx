@@ -17,6 +17,7 @@ const CONFIGURED: Record<string, boolean> = {
   facebook: getOAuthAdapter("facebook").isConfigured(),
   linkedin: getOAuthAdapter("linkedin").isConfigured(),
   youtube: getOAuthAdapter("youtube").isConfigured(),
+  twitter: getOAuthAdapter("twitter").isConfigured(),
 };
 
 export default async function SettingsPage({

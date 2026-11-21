@@ -58,6 +58,8 @@
 :root {
   color-scheme: light;
 
+  --font-instrument-sans: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-ibm-plex-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --font-sans: var(--font-instrument-sans), -apple-system, BlinkMacSystemFont,
     "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   --font-mono: var(--font-ibm-plex-mono), ui-monospace, "SF Mono", Menlo,

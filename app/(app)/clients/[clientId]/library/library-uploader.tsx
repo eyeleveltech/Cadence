@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { uploadMediaAssets } from "@/lib/actions/media";
+import { uploadMediaFile } from "@/components/posts/asset-upload";
 import { Upload } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -17,20 +17,54 @@ export function LibraryUploader({ clientId }: { clientId: string }) {
     async (files: FileList | null) => {
       if (!files || files.length === 0) return;
       setUploading(true);
-      const formData = new FormData();
-      Array.from(files).forEach((f) => formData.append("files", f));
+      const fileList = Array.from(files);
+      const toastId = toast.loading(
+        fileList.length === 1
+          ? `Uploading ${fileList[0].name}…`
+          : `Uploading ${fileList.length} files…`
+      );
 
       try {
-        const result = await uploadMediaAssets(clientId, formData);
-        if (result.uploaded.length) {
-          toast.success(
-            `${result.uploaded.length} file${result.uploaded.length === 1 ? "" : "s"} uploaded`,
-          );
+        let uploadedCount = 0;
+        const failed: { name: string; reason: string }[] = [];
+
+        for (let i = 0; i < fileList.length; i++) {
+          const file = fileList[i];
+          try {
+            await uploadMediaFile(clientId, file, {
+              onProgress: (pct) => {
+                toast.loading(
+                  fileList.length === 1
+                    ? `Uploading ${file.name}: ${pct}%…`
+                    : `Uploading (${i + 1}/${fileList.length}) ${file.name}: ${pct}%…`,
+                  { id: toastId }
+                );
+              },
+            });
+            uploadedCount++;
+          } catch (uploadErr) {
+            failed.push({
+              name: file.name,
+              reason: uploadErr instanceof Error ? uploadErr.message : "Upload failed",
+            });
+          }
         }
-        result.failed.forEach((f) => toast.error(`${f.name}: ${f.reason}`));
-        router.refresh();
+
+        toast.dismiss(toastId);
+
+        if (uploadedCount > 0) {
+          toast.success(
+            `${uploadedCount} file${uploadedCount === 1 ? "" : "s"} uploaded`,
+          );
+          router.refresh();
+        }
+
+        if (failed.length > 0) {
+          failed.forEach((f) => toast.error(`${f.name}: ${f.reason}`));
+        }
       } catch (err) {
         console.error("Upload error:", err);
+        toast.dismiss(toastId);
         toast.error(err instanceof Error ? err.message : "Upload failed");
       } finally {
         setUploading(false);

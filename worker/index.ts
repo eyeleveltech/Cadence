@@ -3,11 +3,15 @@ import { Worker, type Job } from "bullmq";
 import { prisma } from "../lib/prisma";
 import { redis, cadenceQueue, scheduleRepeatingJobs, type CadenceJobName } from "../lib/queue";
 import { getSocialAdapter } from "../lib/social/adapter";
+import { resolvePlatformCaption } from "../lib/social/caption";
 import { notifyMany } from "../lib/notify";
 import { assessConnection, STATUS_LABEL } from "../lib/social/health";
-import { getOAuthAdapter, isPlatformSlug } from "../lib/social/oauth";
-import { encryptToken, decryptToken } from "../lib/crypto";
-import type { PostStatus } from "@prisma/client";
+import { decryptToken } from "../lib/crypto";
+import { isFfmpegAvailable, processVideoAsset } from "../lib/media-pipeline";
+import { storage } from "../lib/storage";
+import { fetchPostMetrics } from "../lib/social/analytics";
+import { getValidAccessToken } from "../lib/social/tokens";
+import type { PostStatus, SocialAccount } from "@prisma/client";
 
 const REVIEW_DEADLINE_SOON_HOURS = 24;
 const REVIEW_OVERDUE_HOURS = 48;
@@ -102,21 +106,26 @@ async function publishPost(postId: string) {
     });
 
     try {
+      const { caption: platformCaption, title: platformTitle } = resolvePlatformCaption(post.caption, platform);
       const result = await getSocialAdapter(platform).publish({
-        caption: post.caption ?? "",
+        caption: platformCaption,
+        title: platformTitle || post.title,
         hashtags: post.hashtags,
         mediaUrls: post.assets.map((a) => a.mediaAsset.originalUrl),
-        postAsStory: post.postAsStory,
+        postAsStory: false,
         account,
+        collaborators: post.collaborators,
+        mediaAsset: post.assets[0]?.mediaAsset,
+        firstComment: post.firstComment,
       });
       await prisma.scheduledJob.upsert({
         where: { idempotencyKey },
         create: {
           postId: post.id, socialAccountId: account.id, platform, idempotencyKey,
           scheduledFor: post.scheduledAt ?? new Date(),
-          status: "DONE", platformPostId: result.externalId, publishedAt: new Date(),
+          status: "DONE", platformPostId: result.externalId, errorLog: result.permalink || null, publishedAt: new Date(),
         },
-        update: { status: "DONE", platformPostId: result.externalId, publishedAt: new Date() },
+        update: { status: "DONE", platformPostId: result.externalId, errorLog: result.permalink || null, publishedAt: new Date() },
       });
       results.push({ platform, ok: true });
     } catch (err) {
@@ -137,6 +146,41 @@ async function publishPost(postId: string) {
   const anySucceeded = results.some((r) => r.ok);
   const newStatus: PostStatus = anySucceeded ? "PUBLISHED" : "FAILED";
   await prisma.post.update({ where: { id: post.id }, data: { status: newStatus, statusChangedAt: new Date() } });
+
+  // Delayed Story Engine: if postAsStory is true and INSTAGRAM was published, queue delayed story job
+  if (post.postAsStory && post.platforms.includes("INSTAGRAM")) {
+    const igAccount = accounts.find((a) => a.platform === "INSTAGRAM");
+    if (igAccount) {
+      const storyKey = `${post.id}:INSTAGRAM_STORY`;
+      const delayMs = Number(process.env.IG_STORY_DELAY_MS || 10 * 60 * 1000);
+      try {
+        const storyJob = await cadenceQueue.add(
+          "publish-story" satisfies CadenceJobName,
+          { postId: post.id },
+          { delay: delayMs, jobId: `story-${post.id}`, removeOnComplete: 50, removeOnFail: 200 }
+        );
+        await prisma.scheduledJob.upsert({
+          where: { idempotencyKey: storyKey },
+          create: {
+            postId: post.id,
+            socialAccountId: igAccount.id,
+            platform: "INSTAGRAM",
+            idempotencyKey: storyKey,
+            bullmqJobId: storyJob.id,
+            status: "QUEUED",
+            scheduledFor: new Date(Date.now() + delayMs),
+          },
+          update: {
+            bullmqJobId: storyJob.id,
+            status: "QUEUED",
+            scheduledFor: new Date(Date.now() + delayMs),
+          },
+        });
+      } catch (err) {
+        console.warn(`[worker] failed to enqueue story for ${post.id}:`, err);
+      }
+    }
+  }
 
   const summary = results.map((r) => `${r.platform}: ${r.ok ? "published" : r.error}`).join(" · ");
   await notifyMany(
@@ -266,14 +310,238 @@ async function leadershipFor(clientId: string): Promise<string[]> {
   return [...new Set([...leadership.map((u) => u.id), ...members.map((m) => m.userId)])];
 }
 
+async function transcodeVideoJob(assetId: string) {
+  const asset = await prisma.mediaAsset.findUnique({
+    where: { id: assetId },
+    include: { variants: true },
+  });
+  if (!asset || asset.originalKind !== "VIDEO") return;
+
+  if (!(await isFfmpegAvailable())) {
+    console.warn(`[worker] FFmpeg not available. Leaving video asset ${assetId} READY without derived variants.`);
+    await prisma.mediaAsset.update({
+      where: { id: assetId },
+      data: { status: "READY" },
+    });
+    return;
+  }
+
+  try {
+    let rawBuffer: Buffer | null = null;
+    if (asset.originalUrl.startsWith("http://") || asset.originalUrl.startsWith("https://")) {
+      const res = await fetch(asset.originalUrl);
+      if (res.ok) {
+        rawBuffer = Buffer.from(await res.arrayBuffer());
+      }
+    } else {
+      rawBuffer = await storage.read(asset.originalUrl);
+    }
+
+    if (!rawBuffer) {
+      console.warn(`[worker] Could not read original media buffer for asset ${assetId}`);
+      return;
+    }
+
+    const variants = await processVideoAsset(asset.clientId, asset.id, rawBuffer);
+    if (variants.length > 0) {
+      await prisma.mediaVariant.createMany({
+        data: variants.map((v) => ({
+          mediaAssetId: asset.id,
+          kind: v.kind,
+          url: v.url,
+          width: v.width,
+          height: v.height,
+          fileSizeBytes: v.fileSizeBytes,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    await prisma.mediaAsset.update({
+      where: { id: asset.id },
+      data: { status: "READY" },
+    });
+    console.log(`[worker] Transcoded video asset ${assetId}: generated ${variants.length} variants.`);
+  } catch (err) {
+    console.error(`[worker] Failed to transcode video asset ${assetId}:`, err);
+    await prisma.mediaAsset.update({
+      where: { id: assetId },
+      data: { status: "READY", processingError: err instanceof Error ? err.message : "Transcode failed" },
+    });
+  }
+}
+
+async function syncAnalyticsJob() {
+  const publishedJobs = await prisma.scheduledJob.findMany({
+    where: {
+      status: "DONE",
+      platformPostId: { not: null },
+    },
+    include: {
+      socialAccount: true,
+    },
+    orderBy: { publishedAt: "desc" },
+    take: 100,
+  });
+
+  let synced = 0;
+  for (const job of publishedJobs) {
+    if (!job.platformPostId || !job.socialAccount) continue;
+
+    let accessToken: string;
+    try {
+      accessToken = await getValidAccessToken(job.socialAccount);
+    } catch {
+      try {
+        accessToken = decryptToken(job.socialAccount.accessToken);
+      } catch {
+        accessToken = job.socialAccount.accessToken;
+      }
+    }
+
+    try {
+      const metrics = await fetchPostMetrics({
+        platform: job.platform,
+        externalPostId: job.platformPostId,
+        accessToken,
+      });
+
+      const engagements =
+        metrics.engagements ??
+        (metrics.likes ?? 0) +
+          (metrics.comments ?? 0) +
+          (metrics.shares ?? 0) +
+          (metrics.saves ?? 0);
+
+      await prisma.analyticsSnapshot.create({
+        data: {
+          postId: job.postId,
+          platform: job.platform,
+          reach: metrics.reach,
+          impressions: metrics.impressions,
+          likes: metrics.likes,
+          comments: metrics.comments,
+          shares: metrics.shares,
+          saves: metrics.saves,
+          engagements,
+        },
+      });
+      synced++;
+    } catch (err) {
+      console.warn(`[worker] Failed to sync analytics for post ${job.postId} on ${job.platform}:`, err);
+    }
+  }
+
+  console.log(`[worker] sync-analytics completed: recorded snapshots for ${synced} published post(s).`);
+}
+
+async function publishStory(postId: string) {
+  const post = await prisma.post.findUnique({
+    where: { id: postId },
+    include: { assets: { include: { mediaAsset: true } } },
+  });
+  if (!post || post.assets.length === 0) return;
+
+  const account = await prisma.socialAccount.findFirst({
+    where: { clientId: post.clientId, platform: "INSTAGRAM", connectionStatus: "CONNECTED" },
+  });
+  if (!account) return;
+
+  const idempotencyKey = `${post.id}:INSTAGRAM_STORY`;
+  const existing = await prisma.scheduledJob.findUnique({
+    where: { idempotencyKey },
+    select: { platformPostId: true, status: true },
+  });
+  if (existing?.status === "DONE" && existing.platformPostId) {
+    return; // Already published
+  }
+
+  await prisma.scheduledJob.upsert({
+    where: { idempotencyKey },
+    create: {
+      postId: post.id,
+      socialAccountId: account.id,
+      platform: "INSTAGRAM",
+      idempotencyKey,
+      scheduledFor: new Date(),
+      status: "PROCESSING",
+    },
+    update: { status: "PROCESSING" },
+  });
+
+  try {
+    const res = await getSocialAdapter("INSTAGRAM").publish({
+      caption: post.caption ?? "",
+      hashtags: post.hashtags,
+      mediaUrls: post.assets.map((a) => a.mediaAsset.originalUrl),
+      postAsStory: true,
+      account,
+    });
+
+    await prisma.scheduledJob.upsert({
+      where: { idempotencyKey },
+      create: {
+        postId: post.id,
+        socialAccountId: account.id,
+        platform: "INSTAGRAM",
+        idempotencyKey,
+        scheduledFor: new Date(),
+        status: "DONE",
+        platformPostId: res.externalId,
+        errorLog: res.permalink || null,
+        publishedAt: new Date(),
+      },
+      update: {
+        status: "DONE",
+        platformPostId: res.externalId,
+        errorLog: res.permalink || null,
+        publishedAt: new Date(),
+      },
+    });
+
+    await notifyMany(
+      [post.createdById, post.assignedDesignerId, post.assignedWriterId].filter(Boolean) as string[],
+      {
+        type: "POST_PUBLISHED",
+        title: `Story Published: ${post.title}`,
+        body: `Instagram Story has been published.`,
+        link: `/posts/${post.id}`,
+      },
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Story publish failed";
+    await prisma.scheduledJob.upsert({
+      where: { idempotencyKey },
+      create: {
+        postId: post.id,
+        socialAccountId: account.id,
+        platform: "INSTAGRAM",
+        idempotencyKey,
+        scheduledFor: new Date(),
+        status: "FAILED",
+        errorLog: message,
+        attempts: 1,
+      },
+      update: {
+        status: "FAILED",
+        errorLog: message,
+        attempts: { increment: 1 },
+      },
+    });
+  }
+}
+
 const worker = new Worker(
   "cadence",
   async (job: Job) => {
     switch (job.name as CadenceJobName) {
       case "check-scheduled-posts": return checkScheduledPosts();
       case "publish-post": return publishPost(job.data.postId);
+      case "publish-story": return publishStory(job.data.postId);
       case "check-review-deadlines": return checkReviewDeadlines();
       case "check-account-health": return checkAccountHealth();
+      case "transcode-video": return transcodeVideoJob(job.data.assetId);
+      case "sync-analytics": return syncAnalyticsJob();
       default: console.warn(`[worker] unknown job: ${job.name}`);
     }
   },
@@ -309,14 +577,7 @@ process.on("SIGINT", shutdown);
  *
  * PAGE and SYSTEM_USER tokens don't expire and have nothing to refresh.
  */
-async function tryRefresh(account: {
-  id: string;
-  platform: string;
-  tokenType: string;
-  tokenExpiresAt: Date | null;
-  accessToken: string;
-  scopes: string[];
-}): Promise<boolean> {
+async function tryRefresh(account: SocialAccount): Promise<boolean> {
   if (account.tokenType !== "USER" || !account.tokenExpiresAt) return false;
 
   const daysLeft = (account.tokenExpiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000);
@@ -324,30 +585,9 @@ async function tryRefresh(account: {
   // surface it rather than this quietly swallowing it.
   if (daysLeft <= 0 || daysLeft > REFRESH_WITHIN_DAYS) return false;
 
-  // Instagram's two routes share Platform.INSTAGRAM; only the direct one
-  // can refresh, and it's the only one that issues USER tokens for IG.
-  const slug = account.platform === "INSTAGRAM" ? "instagram-direct" : account.platform.toLowerCase();
-  if (!isPlatformSlug(slug)) return false;
-
-  const adapter = getOAuthAdapter(slug);
-  if (!adapter.refreshAccessToken || !adapter.isConfigured()) return false;
-
   try {
-    const renewed = await adapter.refreshAccessToken(decryptToken(account.accessToken));
-    if (!renewed) return false;
-
-    await prisma.socialAccount.update({
-      where: { id: account.id },
-      data: {
-        accessToken: encryptToken(renewed.accessToken),
-        tokenExpiresAt: renewed.expiresAt ?? null,
-        connectionStatus: "CONNECTED",
-        statusDetail: null,
-        lastHealthCheckAt: new Date(),
-      },
-    });
-    console.log(`[worker] refreshed ${account.platform} token for account ${account.id}`);
-    return true;
+    const renewed = await getValidAccessToken(account);
+    return Boolean(renewed);
   } catch (err) {
     console.error(`[worker] token refresh failed for ${account.id}:`, err);
     return false;

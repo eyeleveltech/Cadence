@@ -7,9 +7,11 @@ import { AccountPicker } from "./account-picker";
 
 const PLATFORM_LABEL: Record<string, string> = {
   instagram: "Instagram",
+  "instagram-direct": "Instagram",
   facebook: "Facebook",
   linkedin: "LinkedIn",
   youtube: "YouTube",
+  twitter: "X / Twitter",
 };
 
 /**

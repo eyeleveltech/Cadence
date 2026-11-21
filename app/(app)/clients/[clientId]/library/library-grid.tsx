@@ -27,14 +27,25 @@ export function LibraryGrid({ clientId, assets }: { clientId: string; assets: As
     );
   }
 
-  async function handleDelete(assetId: string) {
-    if (!window.confirm("Delete this asset? This can't be undone.")) return;
+  async function handleDelete(assetId: string, e?: React.MouseEvent) {
+    e?.stopPropagation();
+    if (
+      !window.confirm(
+        "Are you sure you want to delete this media asset? It will be removed from Cloudinary and Cadence."
+      )
+    )
+      return;
+
     try {
-      await deleteMediaAsset(assetId, clientId);
-      toast.success("Deleted");
+      const res = await fetch(`/api/media/${assetId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to delete asset");
+      }
+      toast.success("Asset deleted successfully");
       router.refresh();
-    } catch {
-      toast.error("Couldn't delete — admin or manager access required");
+    } catch (err: any) {
+      toast.error(err.message || "Error deleting asset");
     }
   }
 
@@ -48,7 +59,18 @@ export function LibraryGrid({ clientId, assets }: { clientId: string; assets: As
 
         return (
           <div key={asset.id} className="overflow-hidden rounded-2xl border border-border bg-card">
-            <div className="relative aspect-[4/5] bg-[var(--fill)]">
+            <div className="group relative aspect-[4/5] bg-[var(--fill)]">
+              {/* Overlay Trash / Delete Button (Top-Right) */}
+              <button
+                type="button"
+                onClick={(e) => handleDelete(asset.id, e)}
+                className="absolute right-2 top-2 z-10 flex size-8 items-center justify-center rounded-lg bg-black/60 text-white shadow-sm transition hover:bg-red-500/80"
+                title="Delete media asset"
+                aria-label="Delete media asset"
+              >
+                <Trash2 className="size-4" />
+              </button>
+
               {asset.originalKind === "IMAGE" && (thumb || asset.originalUrl) ? (
                 <Image
                   src={thumb?.url ?? asset.originalUrl}
@@ -84,8 +106,10 @@ export function LibraryGrid({ clientId, assets }: { clientId: string; assets: As
               <span className={placed ? "om-pill om-pill-solid" : "om-pill"}>{placed ? "Placed" : "Unplaced"}</span>
               <span className="truncate text-sm text-[var(--ink2)]">{filename}</span>
               <button
-                onClick={() => handleDelete(asset.id)}
-                className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--ink3)] transition-colors hover:bg-muted hover:text-destructive"
+                type="button"
+                onClick={(e) => handleDelete(asset.id, e)}
+                className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--ink3)] transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40"
+                title="Delete media asset"
               >
                 <Trash2 className="size-4" />
               </button>

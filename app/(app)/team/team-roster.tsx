@@ -93,6 +93,11 @@ export function TeamRoster({
               <span className="om-mono hidden text-[var(--ink4)] sm:inline">
                 Joined {format(user.createdAt, "d MMM yyyy")}
               </span>
+              {user.isPendingInvite && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300">
+                  ⏳ Pending Invite
+                </span>
+              )}
               {isAdmin ? (
                 <div className="flex items-center gap-1.5">
                   <Select items={ROLE_LABELS} value={user.role} onValueChange={(v) => v && handleRoleChange(user.id, v as TeamRole)}>

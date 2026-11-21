@@ -2,6 +2,7 @@ import Link from "next/link";
 import { BarChart3, Instagram, Facebook, Linkedin, Youtube } from "lucide-react";
 import { format } from "date-fns";
 import { getClientAnalyticsOverview } from "@/lib/actions/analytics";
+import { InsightsSyncButton } from "./insights-sync-button";
 import type { Platform as PrismaPlatform } from "@prisma/client";
 
 type Platform = PrismaPlatform | "TWITTER";
@@ -40,13 +41,20 @@ export default async function InsightsPage({
 
   if (!overview.hasData) {
     return (
-      <div className="p-6">
+      <div className="space-y-6 p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">Analytics & Insights</h1>
+            <p className="text-xs text-[var(--ink3)]">Real-time engagement, reach, and performance metrics.</p>
+          </div>
+          <InsightsSyncButton clientId={clientId} />
+        </div>
         <div className="flex flex-col items-center gap-3 rounded-2xl border border-border bg-card px-6 py-16 text-center">
           <BarChart3 className="size-7 text-[var(--ink3)]" />
           <p className="text-lg font-bold tracking-tight">No analytics yet</p>
           <p className="max-w-md text-sm text-[var(--ink3)]">
             Reach, impressions, engagement, saves and shares appear here once metrics are logged against a
-            published post. Nothing is estimated — we only show numbers that have actually been recorded.
+            published post. Click &ldquo;Sync Analytics&rdquo; to pull the latest numbers from connected platforms.
           </p>
         </div>
       </div>
@@ -55,6 +63,13 @@ export default async function InsightsPage({
 
   return (
     <div className="space-y-6 p-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Analytics & Insights</h1>
+          <p className="text-xs text-[var(--ink3)]">Real-time engagement, reach, and performance metrics.</p>
+        </div>
+        <InsightsSyncButton clientId={clientId} />
+      </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Total reach" value={overview.totalReach.toLocaleString()} />
         <StatCard label="Total engagement" value={overview.totalEngagements.toLocaleString()} />

@@ -8,14 +8,14 @@ import { getSessionCookie } from "better-auth/cookies";
 // /review needs a real session like everything else — a client reviewer
 // gets there via the magic-link verify redirect, which only fires once
 // Better Auth has already set the session cookie.
-const PUBLIC_PATHS = ["/login", "/api/auth", "/demo"];
+const PUBLIC_PATHS = ["/login", "/api/auth", "/demo", "/set-password"];
 
 // Endpoints that authenticate themselves and must answer with a status
 // code, not a redirect. Bouncing these to /login hands an <img> or an
 // EventSource an HTML login page instead of a clean 401.
 // /api/meta is called by Meta, not by a browser with a session — it
 // verifies the request's HMAC signature itself.
-const SELF_AUTHENTICATING_PATHS = ["/api/media", "/api/notifications", "/api/meta"];
+const SELF_AUTHENTICATING_PATHS = ["/api/media", "/api/notifications", "/api/meta", "/api/cron", "/api/oauth"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -29,6 +29,9 @@ export function middleware(request: NextRequest) {
 
   const sessionCookie = getSessionCookie(request);
   if (!sessionCookie) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);

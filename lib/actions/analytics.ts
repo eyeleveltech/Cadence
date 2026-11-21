@@ -5,6 +5,9 @@ import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireClientWorkspaceAccess } from "@/lib/session";
+import { decryptToken } from "@/lib/crypto";
+import { getValidAccessToken } from "@/lib/social/tokens";
+import { fetchPostMetrics } from "@/lib/social/analytics";
 import type { AnalyticsSnapshot, Platform } from "@prisma/client";
 
 const metric = z.coerce.number().int().min(0).optional();
@@ -108,4 +111,78 @@ export async function getClientAnalyticsOverview(clientId: string) {
     platformBreakdown: [...platformTotals.entries()].map(([platform, v]) => ({ platform, ...v })),
     topPosts,
   };
+}
+
+/** Triggers an immediate on-demand analytics sync across published posts
+ * for a client workspace, saving new snapshots in Prisma without waiting
+ * for the 6-hour background worker sweep. */
+export async function syncClientAnalyticsNow(clientId: string) {
+  await requireClientWorkspaceAccess(clientId);
+
+  const publishedJobs = await prisma.scheduledJob.findMany({
+    where: {
+      status: "DONE",
+      platformPostId: { not: null },
+      post: { clientId },
+    },
+    include: {
+      socialAccount: true,
+    },
+    orderBy: { publishedAt: "desc" },
+    take: 50,
+  });
+
+  let syncedCount = 0;
+  for (const job of publishedJobs) {
+    if (!job.platformPostId || !job.socialAccount) continue;
+
+    let accessToken: string;
+    try {
+      accessToken = await getValidAccessToken(job.socialAccount);
+    } catch {
+      try {
+        accessToken = decryptToken(job.socialAccount.accessToken);
+      } catch {
+        accessToken = job.socialAccount.accessToken;
+      }
+    }
+
+    try {
+      const metrics = await fetchPostMetrics({
+        platform: job.platform,
+        externalPostId: job.platformPostId,
+        accessToken,
+      });
+
+      const engagements =
+        metrics.engagements ??
+        (metrics.likes ?? 0) +
+          (metrics.comments ?? 0) +
+          (metrics.shares ?? 0) +
+          (metrics.saves ?? 0);
+
+      await prisma.analyticsSnapshot.create({
+        data: {
+          postId: job.postId,
+          platform: job.platform,
+          reach: metrics.reach,
+          impressions: metrics.impressions,
+          likes: metrics.likes,
+          comments: metrics.comments,
+          shares: metrics.shares,
+          saves: metrics.saves,
+          engagements,
+        },
+      });
+      syncedCount++;
+    } catch (err) {
+      console.warn(
+        `[analytics] Could not sync metrics for post ${job.postId} on ${job.platform}:`,
+        err,
+      );
+    }
+  }
+
+  revalidatePath(`/clients/${clientId}/insights`);
+  return { success: true, syncedCount };
 }

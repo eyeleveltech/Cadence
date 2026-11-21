@@ -16,7 +16,14 @@ export const redis = new IORedis(process.env.REDIS_URL ?? "redis://localhost:637
 
 export const cadenceQueue = new Queue("cadence", { connection: redis });
 
-export type CadenceJobName = "publish-post" | "check-scheduled-posts" | "check-review-deadlines" | "check-account-health";
+export type CadenceJobName =
+  | "publish-post"
+  | "publish-story"
+  | "check-scheduled-posts"
+  | "check-review-deadlines"
+  | "check-account-health"
+  | "transcode-video"
+  | "sync-analytics";
 
 /** Repeatable schedulers — idempotent, call once on worker boot. */
 export async function scheduleRepeatingJobs() {
@@ -31,5 +38,9 @@ export async function scheduleRepeatingJobs() {
   await cadenceQueue.upsertJobScheduler(
     "check-account-health", { every: 30 * 60_000 },
     { name: "check-account-health" satisfies CadenceJobName },
+  );
+  await cadenceQueue.upsertJobScheduler(
+    "sync-analytics", { every: 6 * 60 * 60_000 },
+    { name: "sync-analytics" satisfies CadenceJobName },
   );
 }

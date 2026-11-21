@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { requireRole, requireUser } from "@/lib/session";
 import { sendTeamInviteEmail } from "@/lib/email";
+import { forgotPasswordLimiter, getClientIp } from "@/lib/rate-limit";
 import type { Role } from "@prisma/client";
 
 const TEAM_ROLES = ["ADMIN", "MANAGER", "WRITER", "DESIGNER"] as const satisfies readonly Role[];
@@ -16,17 +17,34 @@ const TEAM_ROLES = ["ADMIN", "MANAGER", "WRITER", "DESIGNER"] as const satisfies
  * this client" picker. Admin/manager only — this is the full hierarchy. */
 export async function listAllUsers() {
   await requireRole("ADMIN", "MANAGER");
-  return prisma.user.findMany({
-    orderBy: [{ role: "asc" }, { name: "asc" }],
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      role: true,
-      createdAt: true,
-      _count: { select: { clientMemberships: true } },
-    },
-  });
+
+  const [users, pendingVerifications] = await Promise.all([
+    prisma.user.findMany({
+      orderBy: [{ role: "asc" }, { name: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        createdAt: true,
+        _count: { select: { clientMemberships: true } },
+      },
+    }),
+    prisma.verification.findMany({
+      where: {
+        identifier: { startsWith: "reset-password:" },
+        expiresAt: { gt: new Date() },
+      },
+      select: { value: true },
+    }),
+  ]);
+
+  const pendingUserIds = new Set(pendingVerifications.map((v) => v.value));
+
+  return users.map((user) => ({
+    ...user,
+    isPendingInvite: pendingUserIds.has(user.id),
+  }));
 }
 
 const updateRoleSchema = z.object({
@@ -293,8 +311,8 @@ export async function changeCurrentUserPassword(input: z.infer<typeof changePass
       headers: await headers(),
     });
     return { success: true };
-  } catch (err: any) {
-    throw new Error(err.message ?? "Failed to change password. Please check your current password.");
+  } catch (err: unknown) {
+    throw new Error(err instanceof Error ? err.message : "Failed to change password. Please check your current password.");
   }
 }
 
@@ -324,6 +342,14 @@ export async function sendPasswordResetForCurrentUser() {
 export async function requestForgotPassword(email: string) {
   const cleanEmail = email.trim().toLowerCase();
   if (!cleanEmail) throw new Error("Email is required.");
+
+  const clientIp = getClientIp(await headers());
+  const rateLimitResult = forgotPasswordLimiter.check(`${clientIp}:${cleanEmail}`);
+  if (!rateLimitResult.success) {
+    throw new Error(
+      `Too many password reset requests. Please try again in ${rateLimitResult.retryAfterSeconds} seconds.`
+    );
+  }
 
   const user = await prisma.user.findUnique({
     where: { email: cleanEmail },

@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { isPublicAddress } from "./og-scrape";
+import { describe, it, expect, vi } from "vitest";
+import { isPublicAddress, fetchOpenGraphPreview, createSSRFProtectedDispatcher } from "./og-scrape";
+import dns from "dns";
 
 /**
  * The mood board fetches whatever URL someone pastes into it, from
@@ -59,5 +60,44 @@ describe("isPublicAddress", () => {
     for (const junk of ["", "localhost", "not-an-ip", "999.999.999.999"]) {
       expect(isPublicAddress(junk)).toBe(false);
     }
+  });
+});
+
+describe("SSRF TOCTOU DNS Rebinding Protection", () => {
+  it("rejects metadata and loopback URLs before attempting network fetch", async () => {
+    for (const forbidden of [
+      "http://169.254.169.254/latest/meta-data/",
+      "http://127.0.0.1:6379",
+      "http://10.0.0.1",
+      "http://192.168.1.50/status",
+    ]) {
+      const res = await fetchOpenGraphPreview(forbidden);
+      expect(res).toEqual({ title: null, image: null });
+    }
+  });
+
+  it("blocks socket connection if DNS resolves to private or loopback IP", async () => {
+    // Spy on dns.lookup to simulate a DNS rebinding attack returning a loopback IP
+    const spy = vi.spyOn(dns, "lookup").mockImplementation((...args: unknown[]) => {
+      const callback = args[args.length - 1];
+      if (typeof callback === "function") {
+        (callback as (err: Error | null, addresses: { address: string; family: number }[]) => void)(
+          null,
+          [{ address: "127.0.0.1", family: 4 }],
+        );
+      }
+    });
+
+    try {
+      const res = await fetchOpenGraphPreview("https://attacker-rebinding-domain.com");
+      expect(res).toEqual({ title: null, image: null });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("instantiates an SSRF-protected Undici agent dispatcher", () => {
+    const dispatcher = createSSRFProtectedDispatcher();
+    expect(dispatcher).toBeDefined();
   });
 });

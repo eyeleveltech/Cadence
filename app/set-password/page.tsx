@@ -168,7 +168,7 @@ function SetPasswordForm() {
                 </p>
               </div>
               <div className="pt-2">
-                <Button render={<Link href="/login" />} size="lg" className={DARK_BUTTON}>
+                <Button render={<Link href="/login" />} nativeButton={false} size="lg" className={DARK_BUTTON}>
                   Return to Sign In <ArrowRight className="ml-2 size-4" />
                 </Button>
               </div>

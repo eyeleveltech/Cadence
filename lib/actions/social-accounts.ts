@@ -21,7 +21,14 @@ export async function disconnectSocialAccount(input: z.infer<typeof disconnectSc
   const account = await prisma.socialAccount.findUniqueOrThrow({ where: { id: accountId } });
   if (account.clientId !== clientId) throw new Error("That account doesn't belong to this client.");
 
-  await prisma.socialAccount.delete({ where: { id: accountId } });
+  await prisma.$transaction([
+    prisma.scheduledJob.deleteMany({
+      where: { socialAccountId: accountId },
+    }),
+    prisma.socialAccount.delete({
+      where: { id: accountId },
+    }),
+  ]);
 
   await prisma.auditLog.create({
     data: {
@@ -34,6 +41,8 @@ export async function disconnectSocialAccount(input: z.infer<typeof disconnectSc
   });
 
   revalidatePath(`/clients/${clientId}/settings`);
+  revalidatePath(`/clients/${clientId}/plan`);
+  revalidatePath("/posts");
 }
 
 const chooseSchema = z.object({
@@ -82,8 +91,44 @@ export async function chooseSocialAccount(input: z.infer<typeof chooseSchema>) {
     refreshToken: pending.refreshToken,
   });
 
+  // Smart Auto-Link: If Facebook has linked Instagram, auto-link Instagram
+  if (data.platform === "facebook" && chosen.linkedInstagram) {
+    await saveConnectedAccount({
+      clientId: data.clientId,
+      platform: "instagram",
+      account: {
+        externalAccountId: chosen.linkedInstagram.id,
+        accountName: `@${chosen.linkedInstagram.username.replace(/^@+/, "")}`,
+        avatarUrl: chosen.linkedInstagram.profile_picture_url,
+        scopes: ["instagram_content_publish", "instagram_basic"],
+        accessToken: chosen.accessToken,
+        tokenType: "PAGE",
+      },
+      connectedById: user.id,
+    }).catch((err) => console.warn("[oauth:facebook] auto-link instagram failed:", err));
+  }
+
+  // Smart Auto-Link: If Instagram has linked Facebook Page, auto-link Facebook
+  if (data.platform === "instagram" && chosen.linkedFacebookPage) {
+    await saveConnectedAccount({
+      clientId: data.clientId,
+      platform: "facebook",
+      account: {
+        externalAccountId: chosen.linkedFacebookPage.id,
+        accountName: chosen.linkedFacebookPage.name,
+        avatarUrl: chosen.linkedFacebookPage.avatarUrl,
+        scopes: ["pages_manage_posts", "pages_read_engagement"],
+        accessToken: chosen.linkedFacebookPage.access_token,
+        tokenType: "PAGE",
+      },
+      connectedById: user.id,
+    }).catch((err) => console.warn("[oauth:instagram] auto-link facebook failed:", err));
+  }
+
   await clearPendingConnection();
   revalidatePath(`/clients/${data.clientId}/settings`);
+  revalidatePath(`/clients/${data.clientId}/plan`);
+  revalidatePath("/posts");
 }
 
 type SaveInput = {
@@ -102,8 +147,13 @@ export async function saveConnectedAccount({
   if (!isPlatformSlug(platform)) throw new Error("Unknown platform.");
   const prismaPlatform = SLUG_TO_PLATFORM[platform];
 
+  // Ensure single @ prefix for handles
+  const cleanAccountName = account.accountName.startsWith("@")
+    ? `@${account.accountName.replace(/^@+/, "")}`
+    : account.accountName;
+
   const shared = {
-    accountName: account.accountName,
+    accountName: cleanAccountName,
     avatarUrl: account.avatarUrl ?? null,
     accessToken: encryptToken(account.accessToken),
     tokenType: account.tokenType,
@@ -117,10 +167,35 @@ export async function saveConnectedAccount({
     lastHealthCheckAt: new Date(),
   };
 
+  // If connecting a real live account, clean up any previous mock/sandbox account
+  // for this client and platform so the real account takes over without conflict.
+  if (!account.externalAccountId.startsWith("sandbox_")) {
+    const sandboxAccounts = await prisma.socialAccount.findMany({
+      where: {
+        clientId,
+        platform: prismaPlatform,
+        externalAccountId: { startsWith: "sandbox_" },
+      },
+      select: { id: true },
+    });
+    if (sandboxAccounts.length > 0) {
+      const sandboxIds = sandboxAccounts.map((a) => a.id);
+      await prisma.$transaction([
+        prisma.scheduledJob.deleteMany({
+          where: { socialAccountId: { in: sandboxIds } },
+        }),
+        prisma.socialAccount.deleteMany({
+          where: { id: { in: sandboxIds } },
+        }),
+      ]).catch(() => {});
+    }
+  }
+
+  // Enforce strict client isolation: exactly one account per platform per client
   await prisma.socialAccount.upsert({
     where: {
-      clientId_platform_externalAccountId: {
-        clientId, platform: prismaPlatform, externalAccountId: account.externalAccountId,
+      clientId_platform: {
+        clientId, platform: prismaPlatform,
       },
     },
     create: {
@@ -131,6 +206,7 @@ export async function saveConnectedAccount({
       ...shared,
     },
     update: {
+      externalAccountId: account.externalAccountId,
       ...shared,
       ...(refreshToken ? { refreshToken: encryptToken(refreshToken) } : {}),
     },
@@ -157,6 +233,8 @@ export async function cancelPendingConnection(clientId: string) {
   await requireRole("ADMIN", "MANAGER");
   await clearPendingConnection();
   revalidatePath(`/clients/${clientId}/settings`);
+  revalidatePath(`/clients/${clientId}/plan`);
+  revalidatePath("/posts");
 }
 
 /**
@@ -169,10 +247,9 @@ export async function connectSandboxSocialAccount(clientId: string, platform: Pl
 
   await prisma.socialAccount.upsert({
     where: {
-      clientId_platform_externalAccountId: {
+      clientId_platform: {
         clientId,
         platform,
-        externalAccountId: `sandbox_${platform.toLowerCase()}_${clientId}`,
       },
     },
     create: {

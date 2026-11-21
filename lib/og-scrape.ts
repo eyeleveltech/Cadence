@@ -1,6 +1,8 @@
 import "server-only";
 import { lookup } from "dns/promises";
+import dns from "dns";
 import { isIP } from "net";
+import { Agent } from "undici";
 
 /**
  * Pulls og:title / og:image from an arbitrary URL — Pinterest pins,
@@ -15,11 +17,53 @@ import { isIP } from "net";
  * aren't on the public internet — otherwise "add a reference" is a
  * request forgery primitive pointed at the cloud metadata endpoint,
  * redis://localhost, or anything else reachable from the app container.
+ *
+ * To prevent TOCTOU DNS rebinding, we pin the DNS resolution directly
+ * in the undici dispatcher lookup handler so the socket connects only
+ * to the verified public IP while preserving TLS SNI and Host headers.
  */
 
 const MAX_BYTES = 512 * 1024; // more than enough for a <head>
 const TIMEOUT_MS = 5000;
 const MAX_REDIRECTS = 3;
+
+/**
+ * Creates an undici dispatcher that intercepts DNS resolution at socket
+ * connect time and ensures every address is on the public internet.
+ * Pins the first verified public address to eliminate DNS rebinding TOCTOU.
+ */
+export function createSSRFProtectedDispatcher() {
+  return new Agent({
+    connect: {
+      lookup: (hostname, opts, callback) => {
+        dns.lookup(hostname, { all: true }, (err, addresses) => {
+          if (err) return callback(err, null as never);
+
+          if (!addresses || addresses.length === 0) {
+            return callback(new Error(`DNS resolution returned no addresses for '${hostname}'`), null as never);
+          }
+
+          const hasInvalid = addresses.some((a) => !isPublicAddress(a.address));
+          if (hasInvalid) {
+            return callback(
+              new Error(`SSRF blocked: hostname '${hostname}' resolved to non-public address`),
+              null as never,
+            );
+          }
+
+          const pinned = addresses[0];
+          if (opts.all) {
+            callback(null, [pinned] as never);
+          } else {
+            callback(null, pinned.address, pinned.family);
+          }
+        });
+      },
+    },
+  });
+}
+
+const ssrfDispatcher = createSSRFProtectedDispatcher();
 
 export async function fetchOpenGraphPreview(url: string): Promise<{
   title: string | null;
@@ -40,34 +84,41 @@ export async function fetchOpenGraphPreview(url: string): Promise<{
 }
 
 /**
- * Follows redirects by hand. `fetch`'s own redirect handling would
- * re-resolve the next hop for us, which is exactly the check we can't
- * skip — a public URL that 302s to 169.254.169.254 defeats a one-time
- * check on the original address.
+ * Follows redirects by hand with pinned socket DNS resolution.
+ * Every hop re-validates the destination URL and connects only
+ * through the SSRF-protected dispatcher.
  */
-async function fetchPublicHtml(startUrl: string): Promise<string | null> {
+export async function fetchPublicHtml(
+  startUrl: string,
+  dispatcher = ssrfDispatcher,
+): Promise<string | null> {
   let current = startUrl;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     if (!(await isPubliclyRoutable(current))) return null;
 
-    const res = await fetch(current, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; CadenceBot/1.0)" },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      redirect: "manual",
-    });
+    try {
+      const res = await fetch(current, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; CadenceBot/1.0)" },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+        redirect: "manual",
+        dispatcher,
+      } as RequestInit & { dispatcher?: Agent });
 
-    if (res.status >= 300 && res.status < 400) {
-      const location = res.headers.get("location");
-      if (!location) return null;
-      current = new URL(location, current).toString();
-      continue;
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location) return null;
+        current = new URL(location, current).toString();
+        continue;
+      }
+
+      if (!res.ok) return null;
+      if (!res.headers.get("content-type")?.includes("html")) return null;
+
+      return await readCapped(res);
+    } catch {
+      return null;
     }
-
-    if (!res.ok) return null;
-    if (!res.headers.get("content-type")?.includes("html")) return null;
-
-    return await readCapped(res);
   }
 
   return null;

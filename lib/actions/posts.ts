@@ -8,7 +8,9 @@ import { requireClientAccess, requireClientWorkspaceAccess, isLeadership } from 
 import { createNotification, notifyMany } from "@/lib/notify";
 import { refusePostStatusChange, STATUS_REFUSAL_MESSAGE } from "@/lib/roles";
 import { getSocialAdapter } from "@/lib/social/adapter";
-import type { Post, Role } from "@prisma/client";
+import { resolvePlatformCaption } from "@/lib/social/caption";
+import { cadenceQueue } from "@/lib/queue";
+import type { Post, Role, Platform } from "@prisma/client";
 
 const postStatusSchema = z.enum([
   "IDEA", "BRIEFED", "IN_DESIGN", "IN_COPYWRITING", "INTERNAL_REVIEW",
@@ -124,11 +126,16 @@ export async function updatePostStatus(postId: string, status: unknown) {
 
   if (post.status === nextStatus) return;
 
+  if (nextStatus === "PUBLISHED") {
+    return await publishPostNow(postId);
+  }
+
   const refusal = refusePostStatusChange(post.status, nextStatus, user.role as Role);
   if (refusal) throw new Error(STATUS_REFUSAL_MESSAGE[refusal]);
 
   if (nextStatus === "SCHEDULED") {
     assertReadyToSchedule(post);
+    await validatePostForPublishing(post);
   }
 
   await prisma.post.update({
@@ -138,6 +145,85 @@ export async function updatePostStatus(postId: string, status: unknown) {
 
   revalidatePath(`/clients/${post.clientId}/plan`);
   revalidatePath(`/posts/${post.id}`);
+}
+
+const PLATFORM_DISPLAY_NAMES: Record<string, string> = {
+  INSTAGRAM: "Instagram",
+  FACEBOOK: "Facebook",
+  LINKEDIN: "LinkedIn",
+  YOUTUBE: "YouTube",
+  TWITTER: "Twitter",
+};
+
+/**
+ * Validates that a post meets all database and platform requirements before
+ * scheduling or publishing:
+ * 1. At least one platform is selected.
+ * 2. An active connected SocialAccount exists in the database for each selected platform.
+ * 3. If Instagram is selected, at least one media asset (image or video) is attached.
+ */
+export async function validatePostForPublishing(post: {
+  id: string;
+  clientId: string;
+  platforms: Platform[] | string[];
+}) {
+  if (post.platforms.length === 0) {
+    throw new Error("Pick at least one platform before publishing.");
+  }
+
+  // 1. Pre-Publish Account Validation:
+  // Query SocialAccount table for the current clientId and active CONNECTED status
+  const accounts = await prisma.socialAccount.findMany({
+    where: {
+      clientId: post.clientId,
+      platform: { in: post.platforms as Platform[] },
+      connectionStatus: "CONNECTED",
+    },
+    select: { platform: true },
+  });
+
+  for (const platform of post.platforms) {
+    const displayName = PLATFORM_DISPLAY_NAMES[platform] ?? platform;
+    const account = accounts.find((a) => a.platform === platform);
+    if (!account) {
+      throw new Error(`${displayName} account is not connected for this client. Please configure it in Settings.`);
+    }
+  }
+
+  // 2. Platform-Specific Media Requirements:
+  // If the post targets Instagram, it must have at least one image or video asset
+  if (post.platforms.includes("INSTAGRAM")) {
+    const assetCount = await prisma.postAsset.count({
+      where: { postId: post.id },
+    });
+    if (assetCount === 0) {
+      throw new Error("Instagram requires at least one image or video asset to publish.");
+    }
+  }
+
+  // 3. YouTube only supports video uploads (MP4, MOV):
+  if (post.platforms.includes("YOUTUBE")) {
+    const assets = await prisma.postAsset.findMany({
+      where: { postId: post.id },
+      include: { mediaAsset: true },
+    });
+    const hasVideo = assets.some((a) => {
+      if (a.mediaAsset.originalKind === "VIDEO") return true;
+      const mime = a.mediaAsset.mimeType?.toLowerCase() ?? "";
+      const url = a.mediaAsset.originalUrl?.toLowerCase() ?? "";
+      return (
+        mime.startsWith("video/") ||
+        url.endsWith(".mp4") ||
+        url.endsWith(".mov") ||
+        url.endsWith(".webm")
+      );
+    });
+    if (!hasVideo) {
+      throw new Error(
+        "YouTube only supports video uploads (MP4, MOV). Please remove YouTube from this post or attach a video asset."
+      );
+    }
+  }
 }
 
 /**
@@ -177,7 +263,8 @@ const updatePostContentSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   brief: z.string().max(2000).optional(),
   platforms: z.array(platformSchema).optional(),
-  caption: z.string().max(2200).optional(),
+  caption: z.string().max(10000).optional(),
+  firstComment: z.string().max(2200).optional().nullable(),
   hashtags: z.array(z.string().min(1).max(50)).max(30).optional(),
   collaborators: z.array(z.string().min(1).max(30)).max(3).optional(),
   postAsStory: z.boolean().optional(),
@@ -437,55 +524,47 @@ export async function publishPostNow(postId: string) {
     throw new Error("Pick at least one platform before publishing.");
   }
 
+  // Pre-publish validations (account connected + media asset requirements)
+  await validatePostForPublishing(post);
+
   const fullPost = await prisma.post.findUniqueOrThrow({
     where: { id: post.id },
     include: { assets: { include: { mediaAsset: true } } },
   });
 
   const accounts = await prisma.socialAccount.findMany({
-    where: { clientId: post.clientId, platform: { in: post.platforms } },
+    where: {
+      clientId: post.clientId,
+      platform: { in: post.platforms },
+      connectionStatus: "CONNECTED",
+    },
   });
 
-  const isSimulate = process.env.SOCIAL_DEV_SIMULATE === "1";
-  const results: { platform: string; ok: boolean; externalId?: string; error?: string }[] = [];
+  const results: { platform: string; ok: boolean; externalId?: string; permalink?: string; error?: string }[] = [];
 
   for (const platform of post.platforms) {
-    const found = accounts.find((a) => a.platform === platform);
-    const account = found ?? (isSimulate ? {
-      id: `sim_acc_${platform}`,
-      clientId: post.clientId,
-      platform,
-      accountName: `Demo ${platform}`,
-      avatarUrl: null,
-      externalAccountId: `sim_ext_${platform}`,
-      accessToken: "simulated",
-      refreshToken: null,
-      tokenExpiresAt: null,
-      tokenType: "PAGE" as const,
-      scopes: ["pages_manage_posts", "instagram_content_publish"],
-      connectionStatus: "CONNECTED" as const,
-      statusDetail: null,
-      lastHealthCheckAt: new Date(),
-      connectedById: user.id,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    } : null);
+    const account = accounts.find((a) => a.platform === platform);
 
     if (!account) {
-      results.push({ platform, ok: false, error: `No connected account found for ${platform}.` });
-      continue;
+      const displayName = PLATFORM_DISPLAY_NAMES[platform] ?? platform;
+      throw new Error(`${displayName} account is not connected for this client. Please configure it in Settings.`);
     }
 
     const idempotencyKey = `${post.id}:${platform}`;
 
     try {
+      const { caption: platformCaption, title: platformTitle } = resolvePlatformCaption(fullPost.caption, platform);
       const adapter = getSocialAdapter(platform);
       const res = await adapter.publish({
-        caption: fullPost.caption ?? "",
+        caption: platformCaption,
+        title: platformTitle || post.title,
         hashtags: fullPost.hashtags,
         mediaUrls: fullPost.assets.map((a) => a.mediaAsset.originalUrl),
-        postAsStory: fullPost.postAsStory,
+        postAsStory: false,
         account,
+        collaborators: fullPost.collaborators,
+        mediaAsset: fullPost.assets[0]?.mediaAsset,
+        firstComment: fullPost.firstComment,
       });
 
       if (account.id && !account.id.startsWith("sim_")) {
@@ -499,22 +578,45 @@ export async function publishPostNow(postId: string) {
             scheduledFor: new Date(),
             status: "DONE",
             platformPostId: res.externalId,
+            errorLog: res.permalink || null,
             publishedAt: new Date(),
           },
           update: {
             status: "DONE",
             platformPostId: res.externalId,
+            errorLog: res.permalink || null,
             publishedAt: new Date(),
           },
         });
       }
 
-      results.push({ platform, ok: true, externalId: res.externalId });
+      results.push({ platform, ok: true, externalId: res.externalId, permalink: res.permalink });
     } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Publish failed";
+      if (account.id && !account.id.startsWith("sim_")) {
+        await prisma.scheduledJob.upsert({
+          where: { idempotencyKey },
+          create: {
+            postId: post.id,
+            socialAccountId: account.id,
+            platform,
+            idempotencyKey,
+            scheduledFor: new Date(),
+            status: "FAILED",
+            errorLog: errorMsg,
+            attempts: 1,
+          },
+          update: {
+            status: "FAILED",
+            errorLog: errorMsg,
+            attempts: { increment: 1 },
+          },
+        });
+      }
       results.push({
         platform,
         ok: false,
-        error: err instanceof Error ? err.message : "Publish failed",
+        error: errorMsg,
       });
     }
   }
@@ -523,6 +625,10 @@ export async function publishPostNow(postId: string) {
   const anyFailed = results.some((r) => !r.ok);
 
   if (!anySuccess && anyFailed) {
+    await prisma.post.update({
+      where: { id: post.id },
+      data: { status: "FAILED", statusChangedAt: new Date() },
+    });
     const reasons = results.map((r) => `${r.platform}: ${r.error}`).join(" | ");
     throw new Error(`Failed to publish: ${reasons}`);
   }
@@ -534,6 +640,46 @@ export async function publishPostNow(postId: string) {
       statusChangedAt: new Date(),
     },
   });
+
+  // Delayed Story Engine: if postAsStory is true and INSTAGRAM is among platforms, enqueue BullMQ delayed story job
+  if (fullPost.postAsStory && post.platforms.includes("INSTAGRAM")) {
+    const igAccount = accounts.find((a) => a.platform === "INSTAGRAM");
+    if (igAccount) {
+      const storyKey = `${post.id}:INSTAGRAM_STORY`;
+      const delayMs = Number(process.env.IG_STORY_DELAY_MS || 10 * 60 * 1000);
+      try {
+        const storyJob = await cadenceQueue.add(
+          "publish-story",
+          { postId: post.id },
+          {
+            delay: delayMs,
+            jobId: `story-${post.id}`,
+            removeOnComplete: 50,
+            removeOnFail: 200,
+          },
+        );
+        await prisma.scheduledJob.upsert({
+          where: { idempotencyKey: storyKey },
+          create: {
+            postId: post.id,
+            socialAccountId: igAccount.id,
+            platform: "INSTAGRAM",
+            idempotencyKey: storyKey,
+            bullmqJobId: storyJob.id,
+            status: "QUEUED",
+            scheduledFor: new Date(Date.now() + delayMs),
+          },
+          update: {
+            bullmqJobId: storyJob.id,
+            status: "QUEUED",
+            scheduledFor: new Date(Date.now() + delayMs),
+          },
+        });
+      } catch (queueErr) {
+        console.warn("[posts] Could not enqueue delayed Instagram Story job:", queueErr);
+      }
+    }
+  }
 
   const interested = [post.createdById, post.assignedDesignerId, post.assignedWriterId]
     .filter(Boolean) as string[];
@@ -548,5 +694,80 @@ export async function publishPostNow(postId: string) {
   revalidatePath(`/clients/${post.clientId}/plan`);
 
   return { success: true, results };
+}
+
+/**
+ * Fires the Instagram Story immediately without waiting for the 10-minute queue delay.
+ */
+export async function fireStoryNow(postId: string) {
+  const { post, user } = await loadPostForWorkspace(postId);
+
+  if (!isLeadership(user.role) && post.createdById !== user.id) {
+    throw new Error("Only admins, managers, or the post creator can publish the story.");
+  }
+
+  const fullPost = await prisma.post.findUniqueOrThrow({
+    where: { id: post.id },
+    include: { assets: { include: { mediaAsset: true } } },
+  });
+
+  if (fullPost.assets.length === 0) {
+    throw new Error("Instagram Story requires at least one image or video asset.");
+  }
+
+  const account = await prisma.socialAccount.findFirst({
+    where: { clientId: post.clientId, platform: "INSTAGRAM", connectionStatus: "CONNECTED" },
+  });
+
+  if (!account) {
+    throw new Error("Instagram account is not connected for this client.");
+  }
+
+  const storyKey = `${post.id}:INSTAGRAM_STORY`;
+  const adapter = getSocialAdapter("INSTAGRAM");
+  const res = await adapter.publish({
+    caption: fullPost.caption ?? "",
+    hashtags: fullPost.hashtags,
+    mediaUrls: fullPost.assets.map((a) => a.mediaAsset.originalUrl),
+    postAsStory: true,
+    account,
+  });
+
+  if (account.id && !account.id.startsWith("sim_")) {
+    await prisma.scheduledJob.upsert({
+      where: { idempotencyKey: storyKey },
+      create: {
+        postId: post.id,
+        socialAccountId: account.id,
+        platform: "INSTAGRAM",
+        idempotencyKey: storyKey,
+        scheduledFor: new Date(),
+        status: "DONE",
+        platformPostId: res.externalId,
+        errorLog: res.permalink || null,
+        publishedAt: new Date(),
+      },
+      update: {
+        status: "DONE",
+        platformPostId: res.externalId,
+        errorLog: res.permalink || null,
+        publishedAt: new Date(),
+      },
+    });
+  }
+
+  const interested = [post.createdById, post.assignedDesignerId, post.assignedWriterId]
+    .filter(Boolean) as string[];
+  await notifyMany(interested, {
+    type: "POST_PUBLISHED",
+    title: `Story Published: ${post.title}`,
+    body: `Instagram Story for "${post.title}" has been published.`,
+    link: `/posts/${post.id}`,
+  });
+
+  revalidatePath(`/posts/${post.id}`);
+  revalidatePath(`/clients/${post.clientId}/plan`);
+
+  return { success: true, externalId: res.externalId, permalink: res.permalink };
 }
 

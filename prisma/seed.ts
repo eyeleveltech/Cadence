@@ -7,6 +7,7 @@ const prisma = new PrismaClient();
 
 const TEAM: { name: string; email: string; role: Role }[] = [
   { name: "Akmal Rahman", email: "akmal@eyelevelstudio.in", role: "ADMIN" },
+  { name: "Vishvashvar", email: "vvishvashvar@gmail.com", role: "ADMIN" },
   { name: "Dilshad", email: "dilshad@eyelevelstudio.in", role: "MANAGER" },
   { name: "Janani", email: "janani@eyelevelstudio.in", role: "MANAGER" },
   { name: "Shyam", email: "shyam@eyelevelstudio.in", role: "WRITER" },
@@ -25,7 +26,7 @@ const TEAM: { name: string; email: string; role: Role }[] = [
  * Override with SEED_PASSWORD for a shared dev box where the committed
  * one isn't good enough.
  */
-const DEV_PASSWORD = process.env.SEED_PASSWORD ?? "cadence-dev-2026";
+const DEV_PASSWORD = process.env.SEED_PASSWORD || "cadence-dev-2026";
 
 function assertNotProduction() {
   if (process.env.NODE_ENV === "production") {
