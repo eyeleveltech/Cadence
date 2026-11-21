@@ -7,7 +7,7 @@ import { verifyOAuthState } from "@/lib/social/oauth-state";
 import { saveConnectedAccount } from "@/lib/actions/social-accounts";
 import { setPendingConnection } from "@/lib/social/pending-connection";
 import { revalidatePath } from "next/cache";
-import { getOAuthRedirectUri } from "@/lib/social/oauth-utils";
+import { getOAuthRedirectUri, getSafeRedirectUrl } from "@/lib/social/oauth-utils";
 
 type MetaPage = {
   id: string;
@@ -67,10 +67,14 @@ export async function GET(request: NextRequest) {
     clientId = firstClient?.id || null;
   }
 
-  const targetUrl = (query: string) => {
-    const cleanReturnTo = (returnTo || "/").replace(/#.*$/, "");
-    const sep = cleanReturnTo.includes("?") ? "&" : "?";
-    return new URL(`${cleanReturnTo}${sep}${query}`, request.url);
+  const targetUrl = (query: string): string => {
+    const fallback = clientId ? `/clients/${clientId}/settings` : "/planner";
+    const url = getSafeRedirectUrl(returnTo, fallback);
+    const searchParams = new URLSearchParams(query);
+    searchParams.forEach((value, key) => {
+      url.searchParams.set(key, value);
+    });
+    return url.toString();
   };
 
   if (providerError || !code) {
@@ -83,7 +87,7 @@ export async function GET(request: NextRequest) {
 
   if (!clientId) {
     console.error("[Facebook OAuth Callback] Target client could not be identified.");
-    return NextResponse.redirect(new URL("/clients", request.url));
+    return NextResponse.redirect(getSafeRedirectUrl("/clients").toString());
   }
 
   try {
@@ -409,9 +413,8 @@ export async function GET(request: NextRequest) {
         accessToken: userAccessToken,
         expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
       });
-      return NextResponse.redirect(
-        new URL(`/clients/${clientId}/settings/connect/facebook`, request.url),
-      );
+      const pickerUrl = getSafeRedirectUrl(`/clients/${clientId}/settings/connect/facebook`);
+      return NextResponse.redirect(pickerUrl.toString());
     }
 
     revalidatePath(`/clients/${clientId}/settings`);

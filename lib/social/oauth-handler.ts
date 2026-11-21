@@ -5,7 +5,7 @@ import { getOAuthAdapter, isPlatformSlug } from "@/lib/social/oauth";
 import { signOAuthState, generateCodeVerifier, generateCodeChallenge, verifyOAuthState } from "@/lib/social/oauth-state";
 import { setPendingConnection } from "@/lib/social/pending-connection";
 import { saveConnectedAccount } from "@/lib/actions/social-accounts";
-import { getOAuthRedirectUri } from "@/lib/social/oauth-utils";
+import { getOAuthRedirectUri, getSafeRedirectUrl } from "@/lib/social/oauth-utils";
 
 export async function handleOAuthConnect(platform: string, request: NextRequest) {
   if (!isPlatformSlug(platform)) return new Response("Unknown platform", { status: 404 });
@@ -17,12 +17,14 @@ export async function handleOAuthConnect(platform: string, request: NextRequest)
 
   const session = await getSession();
   if (!session) {
-    return NextResponse.redirect(
-      new URL(`/login?next=${encodeURIComponent(returnTo ?? `/clients/${clientId}/settings`)}`, request.url)
+    const loginTarget = getSafeRedirectUrl(
+      `/login?next=${encodeURIComponent(returnTo ?? `/clients/${clientId}/settings`)}`
     );
+    return NextResponse.redirect(loginTarget.toString());
   }
   if (session.user.role !== "ADMIN" && session.user.role !== "MANAGER") {
-    return NextResponse.redirect(new URL(returnTo ?? `/clients/${clientId}/settings`, request.url));
+    const returnTarget = getSafeRedirectUrl(returnTo ?? `/clients/${clientId}/settings`);
+    return NextResponse.redirect(returnTarget.toString());
   }
 
   const client = await prisma.client.findUnique({ where: { id: clientId }, select: { id: true } });
@@ -33,7 +35,8 @@ export async function handleOAuthConnect(platform: string, request: NextRequest)
     const errorTarget = returnTo
       ? `${returnTo}${returnTo.includes("?") ? "&" : "?"}oauth_error=not_configured&platform=${platform}`
       : `/clients/${clientId}/settings?oauth_error=not_configured&platform=${platform}`;
-    return NextResponse.redirect(new URL(errorTarget, request.url));
+    const redirectUrl = getSafeRedirectUrl(errorTarget);
+    return NextResponse.redirect(redirectUrl.toString());
   }
 
   let codeVerifier: string | undefined;
@@ -68,23 +71,24 @@ export async function handleOAuthCallback(platform: string, request: NextRequest
   const session = await getSession();
   if (!session || (session.user.role !== "ADMIN" && session.user.role !== "MANAGER")) {
     console.warn(`[oauth:${platform}:callback] Unauthorized session or missing admin/manager role.`);
-    return NextResponse.redirect(new URL("/login?next=/clients", request.url));
+    return NextResponse.redirect(getSafeRedirectUrl("/login?next=/clients").toString());
   }
 
   const payload = stateParam ? verifyOAuthState(stateParam, session.session.id) : null;
 
   if (!payload || payload.platform !== platform) {
     console.warn(`[oauth:${platform}:callback] State verification failed or platform mismatch.`);
-    return NextResponse.redirect(new URL("/clients", request.url));
+    return NextResponse.redirect(getSafeRedirectUrl("/clients").toString());
   }
 
-  const targetUrl = (query: string) => {
-    if (payload.returnTo) {
-      const cleanReturnTo = payload.returnTo.replace(/#.*$/, "");
-      const sep = cleanReturnTo.includes("?") ? "&" : "?";
-      return new URL(`${cleanReturnTo}${sep}${query}`, request.url);
-    }
-    return new URL(`/clients/${payload.clientId}/settings?${query}`, request.url);
+  const targetUrl = (query: string): string => {
+    const fallback = payload.clientId ? `/clients/${payload.clientId}/settings` : "/planner";
+    const url = getSafeRedirectUrl(payload.returnTo, fallback);
+    const searchParams = new URLSearchParams(query);
+    searchParams.forEach((value, key) => {
+      url.searchParams.set(key, value);
+    });
+    return url.toString();
   };
 
   if (providerError || !code) {
@@ -217,9 +221,8 @@ export async function handleOAuthCallback(platform: string, request: NextRequest
       expiresAt: token.expiresAt?.toISOString(),
     });
 
-    return NextResponse.redirect(
-      new URL(`/clients/${payload.clientId}/settings/connect/${platform}`, request.url)
-    );
+    const pickerUrl = getSafeRedirectUrl(`/clients/${payload.clientId}/settings/connect/${platform}`);
+    return NextResponse.redirect(pickerUrl.toString());
   } catch (err) {
     console.error(`[oauth:${platform}:callback] Callback handler failed with exception:`, err);
     const msg = err instanceof Error ? err.message : "failed";

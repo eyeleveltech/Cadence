@@ -6,7 +6,7 @@ import { encryptToken } from "@/lib/crypto";
 import { getSession } from "@/lib/session";
 import { verifyOAuthState } from "@/lib/social/oauth-state";
 import { revalidatePath } from "next/cache";
-import { getOAuthRedirectUri } from "@/lib/social/oauth-utils";
+import { getOAuthRedirectUri, getSafeRedirectUrl } from "@/lib/social/oauth-utils";
 
 type InstagramAccount = {
   id: string;
@@ -57,10 +57,14 @@ export async function GET(request: NextRequest) {
     clientId = firstClient?.id || null;
   }
 
-  const targetUrl = (query: string) => {
-    const cleanReturnTo = (returnTo || "/").replace(/#.*$/, "");
-    const sep = cleanReturnTo.includes("?") ? "&" : "?";
-    return new URL(`${cleanReturnTo}${sep}${query}`, request.url);
+  const targetUrl = (query: string): string => {
+    const fallback = clientId ? `/clients/${clientId}/settings` : "/planner";
+    const url = getSafeRedirectUrl(returnTo, fallback);
+    const searchParams = new URLSearchParams(query);
+    searchParams.forEach((value, key) => {
+      url.searchParams.set(key, value);
+    });
+    return url.toString();
   };
 
   if (providerError || !code) {
@@ -72,7 +76,7 @@ export async function GET(request: NextRequest) {
 
   if (!clientId) {
     console.error("[oauth:instagram:callback] Could not identify target client.");
-    return NextResponse.redirect(new URL("/clients", request.url));
+    return NextResponse.redirect(getSafeRedirectUrl("/clients").toString());
   }
 
   try {

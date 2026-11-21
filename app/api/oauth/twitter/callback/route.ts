@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { saveConnectedAccount } from "@/lib/actions/social-accounts";
 import { verifyOAuthState } from "@/lib/social/oauth-state";
-import { getOAuthRedirectUri } from "@/lib/social/oauth-utils";
+import { getOAuthRedirectUri, getSafeRedirectUrl } from "@/lib/social/oauth-utils";
 
 export const dynamic = "force-dynamic";
 
@@ -66,15 +66,14 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const targetUrl = (query: string) => {
-    if (returnTo && returnTo !== "/") {
-      const separator = returnTo.includes("?") ? "&" : "?";
-      return new URL(`${returnTo}${separator}${query}`, request.url);
-    }
-    if (clientId) {
-      return new URL(`/clients/${clientId}/settings?${query}`, request.url);
-    }
-    return new URL(`/?${query}`, request.url);
+  const targetUrl = (query: string): string => {
+    const fallback = clientId ? `/clients/${clientId}/settings` : "/posts";
+    const url = getSafeRedirectUrl(returnTo && returnTo !== "/" ? returnTo : fallback);
+    const searchParams = new URLSearchParams(query);
+    searchParams.forEach((value, key) => {
+      url.searchParams.set(key, value);
+    });
+    return url.toString();
   };
 
   if (providerError || !code) {

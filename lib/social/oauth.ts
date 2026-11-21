@@ -1,6 +1,6 @@
 // Shared with the standalone worker process — no "server-only" guard.
 import type { Platform as PrismaPlatform, TokenType } from "@prisma/client";
-export { getOAuthRedirectUri, getBaseUrl } from "./oauth-utils";
+export { getOAuthRedirectUri, getBaseUrl, getSafeRedirectUrl } from "./oauth-utils";
 export type { OAuthPlatform } from "./oauth-utils";
 
 type Platform = PrismaPlatform | "TWITTER";
