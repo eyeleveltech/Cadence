@@ -3,7 +3,6 @@
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import type { listMediaAssets } from "@/lib/actions/media";
-import { deleteMediaAsset } from "@/lib/actions/media";
 import { Trash2, Film } from "lucide-react";
 import { toast } from "sonner";
 
@@ -16,7 +15,7 @@ function getVideoPlayUrl(url: string): string {
   return url;
 }
 
-export function LibraryGrid({ clientId, assets }: { clientId: string; assets: Asset[] }) {
+export function LibraryGrid({ assets }: { clientId: string; assets: Asset[] }) {
   const router = useRouter();
 
   if (assets.length === 0) {
@@ -44,8 +43,9 @@ export function LibraryGrid({ clientId, assets }: { clientId: string; assets: As
       }
       toast.success("Asset deleted successfully");
       router.refresh();
-    } catch (err: any) {
-      toast.error(err.message || "Error deleting asset");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Error deleting asset";
+      toast.error(message);
     }
   }
 

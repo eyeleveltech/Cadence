@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import { getOAuthRedirectUri } from "@/lib/social/oauth-utils";
 
 export const dynamic = "force-dynamic";
 
@@ -51,9 +52,7 @@ export async function GET(req: Request) {
     "QVN1YkNqRjBtVXU5V3BDTGlNTX2k6MTpjaQ";
 
   // CRITICAL: Must exactly match the registered callback without trailing slashes or dynamic query params
-  const redirectUri =
-    process.env.TWITTER_REDIRECT_URI ||
-    "http://localhost:3000/api/oauth/twitter/callback";
+  const redirectUri = process.env.TWITTER_REDIRECT_URI || getOAuthRedirectUri("twitter");
 
   // 4. Exact standard scopes for X OAuth 2.0
   const scopes = ["tweet.read", "tweet.write", "users.read"].join(" ");

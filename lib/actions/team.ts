@@ -9,6 +9,7 @@ import { auth } from "@/lib/auth";
 import { requireRole, requireUser } from "@/lib/session";
 import { sendTeamInviteEmail } from "@/lib/email";
 import { forgotPasswordLimiter, getClientIp } from "@/lib/rate-limit";
+import { getBaseUrl } from "@/lib/social/oauth-utils";
 import type { Role } from "@prisma/client";
 
 const TEAM_ROLES = ["ADMIN", "MANAGER", "WRITER", "DESIGNER"] as const satisfies readonly Role[];
@@ -104,7 +105,7 @@ export async function inviteTeamMember(input: z.infer<typeof inviteTeamMemberSch
     },
   });
 
-  const baseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
+  const baseUrl = getBaseUrl();
   const setupUrl = `${baseUrl}/set-password?token=${token}`;
 
   try {
@@ -330,7 +331,7 @@ export async function sendPasswordResetForCurrentUser() {
     },
   });
 
-  const baseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
+  const baseUrl = getBaseUrl();
   const setupUrl = `${baseUrl}/set-password?token=${token}`;
 
   await sendTeamInviteEmail(user.email, { name: user.name, setupUrl });
@@ -368,7 +369,7 @@ export async function requestForgotPassword(email: string) {
       },
     });
 
-    const baseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
+    const baseUrl = getBaseUrl();
     const setupUrl = `${baseUrl}/set-password?token=${token}`;
 
     try {

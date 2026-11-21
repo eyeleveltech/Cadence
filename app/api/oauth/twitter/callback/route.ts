@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { saveConnectedAccount } from "@/lib/actions/social-accounts";
 import { verifyOAuthState } from "@/lib/social/oauth-state";
+import { getOAuthRedirectUri } from "@/lib/social/oauth-utils";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,6 @@ export async function GET(request: NextRequest) {
 
   const cookieStore = await cookies();
   const codeVerifier = cookieStore.get("twitter_oauth_verifier")?.value;
-  const storedState = cookieStore.get("twitter_oauth_state")?.value;
 
   // Clean up cookies
   cookieStore.delete("twitter_oauth_verifier");
@@ -108,9 +108,7 @@ export async function GET(request: NextRequest) {
   }
 
   // CRITICAL: Must exactly match the redirect_uri sent during authorization
-  const redirectUri =
-    process.env.TWITTER_REDIRECT_URI ||
-    "http://localhost:3000/api/oauth/twitter/callback";
+  const redirectUri = process.env.TWITTER_REDIRECT_URI || getOAuthRedirectUri("twitter");
 
   try {
     console.log("[Twitter OAuth Callback] Exchanging authorization code for token with redirectUri:", redirectUri);

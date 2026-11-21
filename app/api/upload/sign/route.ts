@@ -5,7 +5,7 @@ import { configureCloudinary, isCloudinaryConfigured } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(_req: Request) {
+export async function POST() {
   try {
     const session = await getSession();
     if (!session) {

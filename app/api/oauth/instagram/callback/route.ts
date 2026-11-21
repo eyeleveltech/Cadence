@@ -6,6 +6,7 @@ import { encryptToken } from "@/lib/crypto";
 import { getSession } from "@/lib/session";
 import { verifyOAuthState } from "@/lib/social/oauth-state";
 import { revalidatePath } from "next/cache";
+import { getOAuthRedirectUri } from "@/lib/social/oauth-utils";
 
 type InstagramAccount = {
   id: string;
@@ -82,7 +83,7 @@ export async function GET(request: NextRequest) {
       throw new Error("Missing INSTAGRAM_APP_ID/META_APP_ID or secret in environment.");
     }
 
-    const redirectUri = `${process.env.BETTER_AUTH_URL || "http://localhost:3000"}/api/oauth/instagram/callback`;
+    const redirectUri = getOAuthRedirectUri("instagram");
 
     // 1. Exchange authorization code for access token via Graph API v22.0
     console.log(`[oauth:instagram:callback] Exchanging code for token (redirectUri=${redirectUri})...`);

@@ -70,7 +70,7 @@ export async function uploadMediaDirectly(
             bytes: response.bytes,
             format: response.format,
           });
-        } catch (_parseErr) {
+        } catch {
           reject(new Error("Failed to parse Cloudinary upload response"));
         }
       } else {

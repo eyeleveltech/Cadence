@@ -109,9 +109,8 @@ export function resolveFfmpegPath(): string {
     return process.env.FFMPEG_PATH.trim();
   }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-implied-eval
-    const req = eval("require");
-    const ffmpegStatic = req("ffmpeg-static");
+    const g = globalThis as unknown as { require?: (name: string) => string };
+    const ffmpegStatic = typeof g.require === "function" ? g.require("ffmpeg-static") : null;
     if (ffmpegStatic && typeof ffmpegStatic === "string") {
       return ffmpegStatic;
     }

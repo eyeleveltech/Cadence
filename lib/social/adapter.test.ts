@@ -218,8 +218,8 @@ describe("Social Adapters - Media Publishing (lib/social/adapter.ts)", () => {
     });
 
     it("posts first comment when firstComment option is provided", async () => {
-      const commentCalls: Array<{ url: string; init: any }> = [];
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const commentCalls: Array<{ url: string; init?: RequestInit }> = [];
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
         const urlStr = String(url);
         if (urlStr.includes("/ugcPosts")) {
           return new Response(JSON.stringify({ id: "urn:li:share:with_first_comment_123" }), {
@@ -260,7 +260,7 @@ describe("Social Adapters - Media Publishing (lib/social/adapter.ts)", () => {
 
     it("publishes an image post and posts the first comment to the container", async () => {
       vi.spyOn(storage, "read").mockResolvedValue(Buffer.from("fake-image-bytes"));
-      const commentCalls: Array<{ url: string; init: any }> = [];
+      const commentCalls: Array<{ url: string; init?: RequestInit }> = [];
       vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
         const urlStr = String(url);
         if (urlStr.includes("/media") && !urlStr.includes("media_publish") && !urlStr.includes("/comments")) {

@@ -35,7 +35,7 @@ import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import { PublishingActivityError } from "@/components/posts/publishing-activity";
 import { uploadMediaFile } from "@/components/posts/asset-upload";
-import { isCustomCaptions, parseCustomCaptions } from "@/lib/social/caption";
+import { parseCustomCaptions } from "@/lib/social/caption";
 import { PostPreviewModal } from "@/components/posts/post-preview-modal";
 import type { Platform as PrismaPlatform } from "@prisma/client";
 

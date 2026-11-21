@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getOAuthRedirectUri } from "@/lib/social/oauth-utils";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Missing META_APP_ID in environment" }, { status: 500 });
   }
 
-  const redirectUri = `${process.env.BETTER_AUTH_URL || "http://localhost:3000"}/api/oauth/facebook/callback`;
+  const redirectUri = getOAuthRedirectUri("facebook");
 
   // Required scopes for Facebook Page posting and engagement
   const defaultScopes = [

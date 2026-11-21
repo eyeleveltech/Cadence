@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getOAuthRedirectUri } from "@/lib/social/oauth-utils";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Missing INSTAGRAM_APP_ID or META_APP_ID in environment" }, { status: 500 });
   }
 
-  const redirectUri = `${process.env.BETTER_AUTH_URL || "http://localhost:3000"}/api/oauth/instagram/callback`;
+  const redirectUri = getOAuthRedirectUri("instagram");
 
   // Scopes provisioned in Meta dashboard
   const scopes = [

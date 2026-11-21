@@ -7,6 +7,7 @@ import { verifyOAuthState } from "@/lib/social/oauth-state";
 import { saveConnectedAccount } from "@/lib/actions/social-accounts";
 import { setPendingConnection } from "@/lib/social/pending-connection";
 import { revalidatePath } from "next/cache";
+import { getOAuthRedirectUri } from "@/lib/social/oauth-utils";
 
 type MetaPage = {
   id: string;
@@ -94,7 +95,7 @@ export async function GET(request: NextRequest) {
       throw new Error("Missing META_APP_ID or META_APP_SECRET in environment.");
     }
 
-    const redirectUri = `${process.env.BETTER_AUTH_URL || "http://localhost:3000"}/api/oauth/facebook/callback`;
+    const redirectUri = getOAuthRedirectUri("facebook");
 
     // 1. Exchange authorization code for short-lived user token
     console.log(`[Facebook OAuth Callback] Exchanging code for user token (redirectUri=${redirectUri})...`);
